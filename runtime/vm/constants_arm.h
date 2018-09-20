@@ -268,7 +268,6 @@ const Register PP = R5;     // Caches object pool pointer in generated code.
 const Register SPREG = SP;  // Stack pointer register.
 const Register FPREG = FP;  // Frame pointer register.
 const Register LRREG = LR;  // Link register.
-const Register ICREG = R9;  // IC data register.
 const Register ARGS_DESC_REG = R4;
 const Register CODE_REG = R6;
 const Register THR = R10;  // Caches current thread in generated code.
@@ -307,10 +306,13 @@ const QRegister kAbiLastPreservedFpuReg = Q7;
 const int kAbiPreservedFpuRegCount = 4;
 
 const RegList kReservedCpuRegisters = (1 << SPREG) | (1 << FPREG) | (1 << TMP) |
-                                      (1 << PP) | (1 << THR) | (1 << PC);
+                                      (1 << PP) | (1 << THR) | (1 << LR) |
+                                      (1 << PC);
 // CPU registers available to Dart allocator.
-const RegList kDartAvailableCpuRegs =
+constexpr RegList kDartAvailableCpuRegs =
     kAllCpuRegistersList & ~kReservedCpuRegisters;
+constexpr int kNumberOfDartAvailableCpuRegs = kNumberOfCpuRegisters - 7;
+const intptr_t kStoreBufferWrapperSize = 24;
 // Registers available to Dart that are not preserved by runtime calls.
 const RegList kDartVolatileCpuRegs =
     kDartAvailableCpuRegs & ~kAbiPreservedCpuRegs;

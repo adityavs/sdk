@@ -6,12 +6,13 @@ import 'package:kernel/ast.dart' as ir;
 
 import '../common/names.dart';
 import '../elements/types.dart';
-import '../kernel/element_map.dart';
+import '../ir/util.dart';
 import '../universe/feature.dart';
+import 'element_map.dart';
 
 /// Computes the [RuntimeTypeUse] corresponding to the `e.runtimeType` [node].
 RuntimeTypeUse computeRuntimeTypeUse(
-    KernelToElementMapForImpact elementMap, ir.PropertyGet node) {
+    KernelToElementMap elementMap, ir.PropertyGet node) {
   /// Returns `true` if [node] is of the form `e.runtimeType`.
   bool isGetRuntimeType(ir.TreeNode node) {
     return node is ir.PropertyGet && node.name.name == Identifiers.runtimeType_;
@@ -305,6 +306,6 @@ RuntimeTypeUse computeRuntimeTypeUse(
 
   DartType receiverType = elementMap.getStaticType(receiver);
   DartType argumentType =
-      argument == null ? argument : elementMap.getStaticType(argument);
+      argument == null ? null : elementMap.getStaticType(argument);
   return new RuntimeTypeUse(kind, receiverType, argumentType);
 }

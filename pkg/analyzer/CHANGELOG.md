@@ -1,3 +1,16 @@
+## 0.33.0-alpha.0
+* Switch to using the parser from front_end.
+* Start implementing the new mixin syntax.
+
+## 0.32.4
+* Updated SDK constraint to <3.0.0.
+* Updated to be compatible with Dart 2 void usage semantics.
+* Deprecate the `AnalysisOptions.strongMode` flag. This is now hard-coded to
+  always return true.
+
+## 0.32.3
+* Pull fix in kernel package where non-executable util.dart was moved out of bin/.
+
 ## 0.32.2
 
 * Improved const evaluation analysis (new errors for `const A(B())` if `B` is non-const).

@@ -20,6 +20,8 @@ import '../messages.dart'
         templateInternalProblemNotFoundIn,
         templateInternalProblemPrivateConstructorAccess;
 
+import '../severity.dart' show Severity;
+
 import 'builder.dart'
     show
         ClassBuilder,
@@ -51,6 +53,8 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
         exportScopeBuilder = new ScopeBuilder(exportScope),
         super(null, -1, fileUri);
 
+  bool get isSynthetic => false;
+
   @override
   Declaration get parent => null;
 
@@ -78,23 +82,19 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
     exporters.add(new Export(exporter, this, combinators, charOffset));
   }
 
-  /// See `Loader.addCompileTimeError` for an explanation of the
-  /// arguments passed to this method.
+  /// Add a problem with a severity determined by the severity of the message.
   ///
   /// If [fileUri] is null, it defaults to `this.fileUri`.
-  void addCompileTimeError(
-      Message message, int charOffset, int length, Uri fileUri,
-      {bool wasHandled: false, List<LocatedMessage> context}) {
-    fileUri ??= this.fileUri;
-    loader.addCompileTimeError(message, charOffset, length, fileUri,
-        wasHandled: wasHandled, context: context);
-  }
-
-  /// Add a problem with a severity determined by the severity of the message.
+  ///
+  /// See `Loader.addMessage` for an explanation of the
+  /// arguments passed to this method.
   void addProblem(Message message, int charOffset, int length, Uri fileUri,
-      {List<LocatedMessage> context}) {
+      {bool wasHandled: false,
+      List<LocatedMessage> context,
+      Severity severity}) {
     fileUri ??= this.fileUri;
-    loader.addProblem(message, charOffset, length, fileUri, context: context);
+    loader.addProblem(message, charOffset, length, fileUri,
+        wasHandled: wasHandled, context: context, severity: severity);
   }
 
   /// Returns true if the export scope was modified.
@@ -125,6 +125,8 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
       {bool isExport: false, bool isImport: false});
 
   int finishDeferredLoadTearoffs() => 0;
+
+  int finishForwarders() => 0;
 
   int finishNativeMethods() => 0;
 
@@ -187,7 +189,13 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
     return 0;
   }
 
-  void becomeCoreLibrary(dynamicType);
+  void becomeCoreLibrary() {
+    if (scope.local["dynamic"] == null) {
+      addSyntheticDeclarationOfDynamic();
+    }
+  }
+
+  void addSyntheticDeclarationOfDynamic();
 
   void forEach(void f(String name, Declaration declaration)) {
     scope.forEach((String name, Declaration declaration) {
@@ -216,4 +224,6 @@ abstract class LibraryBuilder<T extends TypeBuilder, R>
     if (!isPatch) return;
     unsupported("${runtimeType}.applyPatches", -1, fileUri);
   }
+
+  void recordAccess(int charOffset, int length, Uri fileUri) {}
 }

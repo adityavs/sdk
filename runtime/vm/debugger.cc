@@ -57,6 +57,8 @@ DEFINE_FLAG(bool,
             "handler instead.  This handler dispatches breakpoints to "
             "the VM service.");
 
+DECLARE_FLAG(bool, enable_interpreter);
+DECLARE_FLAG(bool, trace_deoptimization);
 DECLARE_FLAG(bool, warn_on_pause_with_no_debugger);
 
 #ifndef PRODUCT
@@ -250,25 +252,23 @@ ActivationFrame::ActivationFrame(uword pc,
       token_pos_initialized_(false),
       token_pos_(TokenPosition::kNoSource),
       try_index_(-1),
-      deopt_id_(Thread::kNoDeoptId),
+      deopt_id_(DeoptId::kNone),
       line_number_(-1),
       column_number_(-1),
       context_level_(-1),
       deopt_frame_(Array::ZoneHandle(deopt_frame.raw())),
       deopt_frame_offset_(deopt_frame_offset),
       kind_(kind),
+#if !defined(DART_PRECOMPILED_RUNTIME)
+      is_interpreted_(FLAG_enable_interpreter &&
+                      function_.Bytecode() == code_.raw()),
+#else
+      is_interpreted_(false),
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
       vars_initialized_(false),
       var_descriptors_(LocalVarDescriptors::ZoneHandle()),
       desc_indices_(8),
       pc_desc_(PcDescriptors::ZoneHandle()) {
-  // TODO(regis): If debugging of interpreted code is required, recognize an
-  // interpreted activation frame and respect alternate frame layout.
-  // For now, punt.
-#if defined(DART_USE_INTERPRETER)
-  if (function_.Bytecode() == code_.raw()) {
-    UNIMPLEMENTED();
-  }
-#endif
 }
 
 ActivationFrame::ActivationFrame(Kind kind)
@@ -288,6 +288,7 @@ ActivationFrame::ActivationFrame(Kind kind)
       deopt_frame_(Array::ZoneHandle()),
       deopt_frame_offset_(0),
       kind_(kind),
+      is_interpreted_(false),
       vars_initialized_(false),
       var_descriptors_(LocalVarDescriptors::ZoneHandle()),
       desc_indices_(8),
@@ -310,28 +311,41 @@ ActivationFrame::ActivationFrame(const Closure& async_activation)
       deopt_frame_(Array::ZoneHandle()),
       deopt_frame_offset_(0),
       kind_(kAsyncActivation),
+      is_interpreted_(false),
       vars_initialized_(false),
       var_descriptors_(LocalVarDescriptors::ZoneHandle()),
       desc_indices_(8),
       pc_desc_(PcDescriptors::ZoneHandle()) {
   // Extract the function and the code from the asynchronous activation.
   function_ = async_activation.function();
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  // TODO(regis): Revise debugger functionality when running a mix of
+  // interpreted and compiled code.
+  if (!FLAG_enable_interpreter || !function_.HasBytecode()) {
+    function_.EnsureHasCompiledUnoptimizedCode();
+  }
+  if (FLAG_enable_interpreter && function_.HasBytecode()) {
+    is_interpreted_ = true;
+    code_ = function_.Bytecode();
+  } else {
+    code_ = function_.unoptimized_code();
+  }
+#else
   function_.EnsureHasCompiledUnoptimizedCode();
   code_ = function_.unoptimized_code();
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
   ctx_ = async_activation.context();
   ASSERT(fp_ == 0);
   ASSERT(!ctx_.IsNull());
 }
 
 bool Debugger::NeedsIsolateEvents() {
-  return ((isolate_ != Dart::vm_isolate()) &&
-          !ServiceIsolate::IsServiceIsolateDescendant(isolate_) &&
+  return (!Isolate::IsVMInternalIsolate(isolate_) &&
           ((event_handler_ != NULL) || Service::isolate_stream.enabled()));
 }
 
 bool Debugger::NeedsDebugEvents() {
-  ASSERT(isolate_ != Dart::vm_isolate() &&
-         !ServiceIsolate::IsServiceIsolateDescendant(isolate_));
+  ASSERT(!Isolate::IsVMInternalIsolate(isolate_));
   return (FLAG_warn_on_pause_with_no_debugger || (event_handler_ != NULL) ||
           Service::debug_stream.enabled());
 }
@@ -653,6 +667,11 @@ intptr_t ActivationFrame::ColumnNumber() {
 
 void ActivationFrame::GetVarDescriptors() {
   if (var_descriptors_.IsNull()) {
+    if (is_interpreted()) {
+      // TODO(regis): Kernel bytecode does not yet provide var descriptors.
+      var_descriptors_ = Object::empty_var_descriptors().raw();
+      return;
+    }
     Code& unoptimized_code = Code::Handle(function().unoptimized_code());
     if (unoptimized_code.IsNull()) {
       Thread* thread = Thread::Current();
@@ -702,7 +721,7 @@ intptr_t ActivationFrame::ContextLevel() {
 
     GetVarDescriptors();
     intptr_t deopt_id = DeoptId();
-    if (deopt_id == Thread::kNoDeoptId) {
+    if (deopt_id == DeoptId::kNone) {
       PrintDescriptorsError("Missing deopt id");
     }
     intptr_t var_desc_len = var_descriptors_.Length();
@@ -917,7 +936,28 @@ void ActivationFrame::ExtractTokenPositionFromAsyncClosure() {
           :
           // source script tokens array has first element duplicated
           await_jump_var;
-  ASSERT(await_to_token_map_index < await_to_token_map.Length());
+
+  if (script.kind() == RawScript::kKernelTag) {
+    // yield_positions returns all yield positions for the script (in sorted
+    // order).
+    // We thus need to offset the function start to get the actual index.
+    if (!function_.token_pos().IsReal()) {
+      return;
+    }
+    const intptr_t function_start = function_.token_pos().value();
+    for (intptr_t i = 0;
+         i < await_to_token_map.Length() &&
+         Smi::Value(reinterpret_cast<RawSmi*>(await_to_token_map.At(i))) <
+             function_start;
+         i++) {
+      await_to_token_map_index++;
+    }
+  }
+
+  if (await_to_token_map_index >= await_to_token_map.Length()) {
+    return;
+  }
+
   const Object& token_pos =
       Object::Handle(await_to_token_map.At(await_to_token_map_index));
   if (token_pos.IsNull()) {
@@ -1112,8 +1152,8 @@ RawObject* ActivationFrame::GetParameter(intptr_t index) {
     // were actually supplied at the call site, but they are copied to a fixed
     // place in the callee's frame.
 
-    return GetVariableValue(
-        LocalVarAddress(fp(), FrameSlotForVariableIndex(-index)));
+    return GetVariableValue(LocalVarAddress(
+        fp(), runtime_frame_layout.FrameSlotForVariableIndex(-index)));
   } else {
     intptr_t reverse_index = num_parameters - index;
     return GetVariableValue(ParamAddress(fp(), reverse_index));
@@ -1126,7 +1166,8 @@ RawObject* ActivationFrame::GetClosure() {
 }
 
 RawObject* ActivationFrame::GetStackVar(VariableIndex variable_index) {
-  const intptr_t slot_index = FrameSlotForVariableIndex(variable_index.value());
+  const intptr_t slot_index =
+      runtime_frame_layout.FrameSlotForVariableIndex(variable_index.value());
   if (deopt_frame_.IsNull()) {
     return GetVariableValue(LocalVarAddress(fp(), slot_index));
   } else {
@@ -1714,8 +1755,7 @@ Debugger::~Debugger() {
 void Debugger::Shutdown() {
   // TODO(johnmccutchan): Do not create a debugger for isolates that don't need
   // them. Then, assert here that isolate_ is not one of those isolates.
-  if ((isolate_ == Dart::vm_isolate()) ||
-      ServiceIsolate::IsServiceIsolateDescendant(isolate_)) {
+  if (Isolate::IsVMInternalIsolate(isolate_)) {
     return;
   }
   while (breakpoint_locations_ != NULL) {
@@ -1831,6 +1871,9 @@ RawFunction* Debugger::ResolveFunction(const Library& library,
 // We currently don't have this info so we deoptimize all functions.
 void Debugger::DeoptimizeWorld() {
   BackgroundCompiler::Stop(isolate_);
+  if (FLAG_trace_deoptimization) {
+    THR_Print("Deopt for debugger\n");
+  }
   DeoptimizeFunctionsOnStack();
   // Iterate over all classes, deoptimize functions.
   // TODO(hausner): Could possibly be combined with RemoveOptimizedCode()
@@ -2860,11 +2903,17 @@ BreakpointLocation* Debugger::SetBreakpoint(const Script& script,
                                             TokenPosition token_pos,
                                             TokenPosition last_token_pos,
                                             intptr_t requested_line,
-                                            intptr_t requested_column) {
+                                            intptr_t requested_column,
+                                            const Function& function) {
   Function& func = Function::Handle();
-  if (!FindBestFit(script, token_pos, last_token_pos, &func)) {
-    return NULL;
+  if (function.IsNull()) {
+    if (!FindBestFit(script, token_pos, last_token_pos, &func)) {
+      return NULL;
+    }
+  } else {
+    func = function.raw();
   }
+
   if (!func.IsNull()) {
     // There may be more than one function object for a given function
     // in source code. There may be implicit closure functions, and
@@ -2971,7 +3020,7 @@ Breakpoint* Debugger::SetBreakpointAtEntry(const Function& target_function,
   const Script& script = Script::Handle(target_function.script());
   BreakpointLocation* bpt_location = SetBreakpoint(
       script, target_function.token_pos(), target_function.end_token_pos(), -1,
-      -1 /* no requested line/col */);
+      -1 /* no requested line/col */, target_function);
   if (bpt_location == NULL) {
     return NULL;
   }
@@ -2990,8 +3039,9 @@ Breakpoint* Debugger::SetBreakpointAtActivation(const Instance& closure,
   }
   const Function& func = Function::Handle(Closure::Cast(closure).function());
   const Script& script = Script::Handle(func.script());
-  BreakpointLocation* bpt_location = SetBreakpoint(
-      script, func.token_pos(), func.end_token_pos(), -1, -1 /* no line/col */);
+  BreakpointLocation* bpt_location =
+      SetBreakpoint(script, func.token_pos(), func.end_token_pos(), -1,
+                    -1 /* no line/col */, func);
   return bpt_location->AddPerClosure(this, closure, for_over_await);
 }
 
@@ -3108,7 +3158,7 @@ BreakpointLocation* Debugger::BreakpointLocationAtLineCol(
   ASSERT(first_token_idx <= last_token_idx);
   while ((bpt == NULL) && (first_token_idx <= last_token_idx)) {
     bpt = SetBreakpoint(script, first_token_idx, last_token_idx, line_number,
-                        column_number);
+                        column_number, Function::Handle());
     first_token_idx.Next();
   }
   if ((bpt == NULL) && FLAG_verbose_debug) {

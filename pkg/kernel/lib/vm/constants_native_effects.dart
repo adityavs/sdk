@@ -47,8 +47,10 @@ class VmConstantsBackend implements ConstantsBackend {
     switch (nativeName) {
       case 'Bool_fromEnvironment':
         final String name = (positionalArguments[0] as StringConstant).value;
-        final BoolConstant constant = namedArguments['defaultValue'];
-        final bool defaultValue = constant != null ? constant.value : false;
+        final Constant constant = namedArguments['defaultValue'];
+        final bool defaultValue = constant is BoolConstant
+            ? constant.value
+            : (constant is NullConstant ? null : false);
         bool value;
         if (defines != null) {
           value = defines[name] == 'true'
@@ -57,7 +59,7 @@ class VmConstantsBackend implements ConstantsBackend {
         } else {
           value = new bool.fromEnvironment(name, defaultValue: defaultValue);
         }
-        return new BoolConstant(value);
+        return value != null ? new BoolConstant(value) : new NullConstant();
       case 'Integer_fromEnvironment':
         final String name = (positionalArguments[0] as StringConstant).value;
         final Constant constant = namedArguments['defaultValue'];
@@ -87,13 +89,6 @@ class VmConstantsBackend implements ConstantsBackend {
         return value == null ? new NullConstant() : new StringConstant(value);
     }
     throw 'No native effect registered for constant evaluation: $nativeName';
-  }
-
-  Constant buildSymbolConstant(StringConstant value) {
-    return new InstanceConstant(
-        internalSymbolClass.reference,
-        const <DartType>[],
-        <Reference, Constant>{symbolNameField.reference: value});
   }
 
   Constant lowerMapConstant(MapConstant constant) {

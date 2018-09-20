@@ -4,8 +4,14 @@
 
 library js_backend.runtime_types;
 
+import '../common.dart';
 import '../common/names.dart' show Identifiers;
-import '../common_elements.dart' show CommonElements, ElementEnvironment;
+import '../common_elements.dart'
+    show
+        CommonElements,
+        ElementEnvironment,
+        JCommonElements,
+        JElementEnvironment;
 import '../elements/entities.dart';
 import '../elements/names.dart';
 import '../elements/types.dart';
@@ -13,15 +19,14 @@ import '../js/js.dart' as jsAst;
 import '../js/js.dart' show js;
 import '../js_emitter/js_emitter.dart' show Emitter;
 import '../options.dart';
+import '../universe/class_hierarchy.dart';
 import '../universe/feature.dart';
 import '../universe/selector.dart';
 import '../universe/world_builder.dart';
-import '../world.dart' show ClassQuery, JClosedWorld, KClosedWorld;
+import '../world.dart' show JClosedWorld, KClosedWorld;
 import 'backend_usage.dart';
 import 'namer.dart';
 import 'native_data.dart';
-
-bool cacheRtiDataForTesting = false;
 
 /// For each class, stores the possible class subtype tests that could succeed.
 abstract class TypeChecks {
@@ -90,8 +95,6 @@ abstract class RuntimeTypesNeed {
   /// arguments.
   bool selectorNeedsTypeArguments(Selector selector);
 
-  bool get runtimeTypeUsedOnClosures;
-
   /// Returns `true` if a generic instantiation on an expression of type
   /// [functionType] with the given [typeArgumentCount] needs to pass type
   /// arguments.
@@ -117,9 +120,6 @@ class TrivialRuntimeTypesNeed implements RuntimeTypesNeed {
 
   @override
   bool selectorNeedsTypeArguments(Selector selector) => true;
-
-  @override
-  bool get runtimeTypeUsedOnClosures => true;
 
   @override
   bool instantiationNeedsTypeArguments(
@@ -241,7 +241,7 @@ class TrivialRuntimeTypesChecksBuilder implements RuntimeTypesChecksBuilder {
     rtiChecksBuilderClosed = true;
 
     Map<ClassEntity, ClassUse> classUseMap = <ClassEntity, ClassUse>{};
-    for (ClassEntity cls in _closedWorld
+    for (ClassEntity cls in _closedWorld.classHierarchy
         .getClassSet(_closedWorld.commonElements.objectClass)
         .subtypes()) {
       ClassUse classUse = new ClassUse()
@@ -249,8 +249,8 @@ class TrivialRuntimeTypesChecksBuilder implements RuntimeTypesChecksBuilder {
         ..checkedInstance = true
         ..typeArgument = true
         ..checkedTypeArgument = true
-        ..functionType = _computeFunctionType(_elementEnvironment, cls,
-            strongMode: options.strongMode);
+        ..typeLiteral = true
+        ..functionType = _computeFunctionType(_elementEnvironment, cls);
       classUseMap[cls] = classUse;
     }
     TypeChecks typeChecks = _substitutions._requiredChecks =
@@ -260,7 +260,7 @@ class TrivialRuntimeTypesChecksBuilder implements RuntimeTypesChecksBuilder {
 
   Set<ClassEntity> computeCheckedClasses(
       CodegenWorldBuilder codegenWorldBuilder, Set<DartType> implicitIsChecks) {
-    return _closedWorld
+    return _closedWorld.classHierarchy
         .getClassSet(_closedWorld.commonElements.objectClass)
         .subtypes()
         .toSet();
@@ -291,7 +291,8 @@ abstract class RuntimeTypesSubstitutionsMixin
   JClosedWorld get _closedWorld;
   TypeChecks get _requiredChecks;
 
-  ElementEnvironment get _elementEnvironment => _closedWorld.elementEnvironment;
+  JElementEnvironment get _elementEnvironment =>
+      _closedWorld.elementEnvironment;
   DartTypes get _types => _closedWorld.dartTypes;
   RuntimeTypesNeed get _rtiNeed => _closedWorld.rtiNeed;
 
@@ -339,10 +340,12 @@ abstract class RuntimeTypesSubstitutionsMixin
 
       bool isNativeClass = _closedWorld.nativeData.isNativeClass(cls);
       if (classUse.typeArgument ||
+          classUse.typeLiteral ||
           (isNativeClass && classUse.checkedInstance)) {
         Substitution substitution = computeSubstitution(cls, cls);
         // We need [cls] at runtime - even if [cls] is not instantiated. Either
-        // as a type argument or for an is-test if [cls] is native.
+        // as a type argument, for a type literal or for an is-test if [cls] is
+        // native.
         checks.add(new TypeCheck(cls, substitution, needsIs: isNativeClass));
       }
 
@@ -491,7 +494,7 @@ abstract class RuntimeTypesSubstitutionsMixin
 
     for (ClassEntity cls in classUseMap.keys) {
       ClassUse classUse = classUseMap[cls] ?? emptyUse;
-      if (classUse.instance || classUse.typeArgument) {
+      if (classUse.instance || classUse.typeArgument || classUse.typeLiteral) {
         // Add checks only for classes that are live either as instantiated
         // classes or type arguments passed at runtime.
         computeChecks(cls);
@@ -507,13 +510,10 @@ abstract class RuntimeTypesSubstitutionsMixin
     ArgumentCollector collector = new ArgumentCollector();
     for (ClassEntity target in checks.classes) {
       ClassChecks classChecks = checks[target];
-      if (classChecks.isNotEmpty) {
-        instantiated.add(target);
-        for (TypeCheck check in classChecks.checks) {
-          Substitution substitution = check.substitution;
-          if (substitution != null) {
-            collector.collectAll(substitution.arguments);
-          }
+      for (TypeCheck check in classChecks.checks) {
+        Substitution substitution = check.substitution;
+        if (substitution != null) {
+          collector.collectAll(substitution.arguments);
         }
       }
     }
@@ -721,9 +721,6 @@ class RuntimeTypesNeedImpl implements RuntimeTypesNeed {
   final Set<Local> localFunctionsNeedingTypeArguments;
   final Set<Selector> selectorsNeedingTypeArguments;
   final Set<int> instantiationsNeedingTypeArguments;
-  // TODO(johnniwinther): Remove these fields together with Dart 1.
-  final bool allNeedsTypeArguments;
-  final bool runtimeTypeUsedOnClosures;
 
   RuntimeTypesNeedImpl(
       this._elementEnvironment,
@@ -733,33 +730,28 @@ class RuntimeTypesNeedImpl implements RuntimeTypesNeed {
       this.localFunctionsNeedingSignature,
       this.localFunctionsNeedingTypeArguments,
       this.selectorsNeedingTypeArguments,
-      this.instantiationsNeedingTypeArguments,
-      {this.allNeedsTypeArguments,
-      this.runtimeTypeUsedOnClosures});
+      this.instantiationsNeedingTypeArguments);
 
   bool checkClass(covariant ClassEntity cls) => true;
 
   bool classNeedsTypeArguments(ClassEntity cls) {
     assert(checkClass(cls));
     if (!_elementEnvironment.isGenericClass(cls)) return false;
-    if (allNeedsTypeArguments) return true;
     return classesNeedingTypeArguments.contains(cls);
   }
 
   bool methodNeedsSignature(FunctionEntity function) {
-    return allNeedsTypeArguments || methodsNeedingSignature.contains(function);
+    return methodsNeedingSignature.contains(function);
   }
 
   bool methodNeedsTypeArguments(FunctionEntity function) {
     if (function.parameterStructure.typeParameters == 0) return false;
-    if (allNeedsTypeArguments) return true;
     return methodsNeedingTypeArguments.contains(function);
   }
 
   @override
   bool selectorNeedsTypeArguments(Selector selector) {
     if (selector.callStructure.typeArgumentCount == 0) return false;
-    if (allNeedsTypeArguments) return true;
     return selectorsNeedingTypeArguments.contains(selector);
   }
 
@@ -1469,7 +1461,8 @@ class RuntimeTypesNeedBuilderImpl extends _RuntimeTypesBase
         classesNeedingTypeArguments.add(cls);
 
         // TODO(ngeoffray): This should use subclasses, not subtypes.
-        closedWorld.forEachStrictSubtypeOf(cls, (ClassEntity sub) {
+        closedWorld.classHierarchy.forEachStrictSubtypeOf(cls,
+            (ClassEntity sub) {
           potentiallyNeedTypeArguments(sub);
         });
       } else if (entity is FunctionEntity) {
@@ -1485,9 +1478,7 @@ class RuntimeTypesNeedBuilderImpl extends _RuntimeTypesBase
       });
     }
 
-    Set<Local> localFunctions = options.strongMode
-        ? resolutionWorldBuilder.localFunctions.toSet()
-        : resolutionWorldBuilder.localFunctionsWithFreeTypeVariables.toSet();
+    Set<Local> localFunctions = resolutionWorldBuilder.localFunctions.toSet();
     Set<FunctionEntity> closurizedMembers =
         resolutionWorldBuilder.closurizedMembersWithFreeTypeVariables.toSet();
 
@@ -1507,35 +1498,24 @@ class RuntimeTypesNeedBuilderImpl extends _RuntimeTypesBase
 
       Set<Local> localFunctionsToRemove;
       Set<FunctionEntity> closurizedMembersToRemove;
-      if (options.strongMode) {
-        for (Local function in localFunctions) {
-          FunctionType functionType =
-              _elementEnvironment.getLocalFunctionType(function);
-          if (potentialSubtypeOf == null ||
-              closedWorld.dartTypes.isPotentialSubtype(
-                  functionType, potentialSubtypeOf,
-                  // TODO(johnniwinther): Use register generic instantiations
-                  // instead.
-                  assumeInstantiations: _genericInstantiations.isNotEmpty)) {
-            functionType.forEachTypeVariable((TypeVariableType typeVariable) {
-              Entity typeDeclaration = typeVariable.element.typeDeclaration;
-              if (!processedEntities.contains(typeDeclaration)) {
-                potentiallyNeedTypeArguments(typeDeclaration);
-              }
-            });
-            localFunctionsNeedingSignature.add(function);
-            localFunctionsToRemove ??= new Set<Local>();
-            localFunctionsToRemove.add(function);
-          }
-        }
-      } else {
-        for (Local function in localFunctions) {
-          if (checkFunctionType(
-              _elementEnvironment.getLocalFunctionType(function))) {
-            localFunctionsNeedingSignature.add(function);
-            localFunctionsToRemove ??= new Set<Local>();
-            localFunctionsToRemove.add(function);
-          }
+      for (Local function in localFunctions) {
+        FunctionType functionType =
+            _elementEnvironment.getLocalFunctionType(function);
+        if (potentialSubtypeOf == null ||
+            closedWorld.dartTypes
+                .isPotentialSubtype(functionType, potentialSubtypeOf,
+                    // TODO(johnniwinther): Use register generic instantiations
+                    // instead.
+                    assumeInstantiations: _genericInstantiations.isNotEmpty)) {
+          functionType.forEachTypeVariable((TypeVariableType typeVariable) {
+            Entity typeDeclaration = typeVariable.element.typeDeclaration;
+            if (!processedEntities.contains(typeDeclaration)) {
+              potentiallyNeedTypeArguments(typeDeclaration);
+            }
+          });
+          localFunctionsNeedingSignature.add(function);
+          localFunctionsToRemove ??= new Set<Local>();
+          localFunctionsToRemove.add(function);
         }
       }
       for (FunctionEntity function in closurizedMembers) {
@@ -1584,10 +1564,6 @@ class RuntimeTypesNeedBuilderImpl extends _RuntimeTypesBase
     processChecks(typeVariableTests.explicitIsChecks);
     processChecks(typeVariableTests.implicitIsChecks);
 
-    if (options.enableTypeAssertions) {
-      checkClosures();
-    }
-
     // Add the classes, methods and local functions that need type arguments
     // because they use a type variable as a literal.
     classesUsingTypeVariableLiterals.forEach(potentiallyNeedTypeArguments);
@@ -1627,132 +1603,135 @@ class RuntimeTypesNeedBuilderImpl extends _RuntimeTypesBase
       }
     }
 
-    bool allNeedsTypeArguments;
-    bool runtimeTypeUsedOnClosures;
     BackendUsage backendUsage = closedWorld.backendUsage;
     CommonElements commonElements = closedWorld.commonElements;
-    if (!options.strongMode) {
-      allNeedsTypeArguments =
-          runtimeTypeUsedOnClosures = backendUsage.isRuntimeTypeUsed;
-    } else {
-      allNeedsTypeArguments = runtimeTypeUsedOnClosures = false;
 
-      /// Set to `true` if subclasses of `Object` need runtimeType. This is
-      /// only used to stop the computation early.
-      bool neededOnAll = false;
+    /// Set to `true` if subclasses of `Object` need runtimeType. This is
+    /// only used to stop the computation early.
+    bool neededOnAll = false;
 
-      /// Set to `true` if subclasses of `Function` need runtimeType.
-      bool neededOnFunctions = false;
+    /// Set to `true` if subclasses of `Function` need runtimeType.
+    bool neededOnFunctions = false;
 
-      Set<ClassEntity> classesDirectlyNeedingRuntimeType =
-          new Set<ClassEntity>();
+    Set<ClassEntity> classesDirectlyNeedingRuntimeType = new Set<ClassEntity>();
 
-      ClassEntity impliedClass(DartType type) {
-        if (type is InterfaceType) {
-          return type.element;
-        } else if (type is DynamicType) {
-          return commonElements.objectClass;
-        } else if (type is FunctionType) {
-          // TODO(johnniwinther): Include only potential function type subtypes.
-          return commonElements.functionClass;
-        } else if (type is VoidType) {
-          // No classes implied.
-        } else if (type is FunctionTypeVariable) {
-          return impliedClass(type.bound);
-        } else if (type is TypeVariableType) {
-          // TODO(johnniwinther): Can we do better?
-          return impliedClass(
-              _elementEnvironment.getTypeVariableBound(type.element));
-        }
-        throw new UnsupportedError('Unexpected type $type');
+    ClassEntity impliedClass(DartType type) {
+      if (type is InterfaceType) {
+        return type.element;
+      } else if (type is DynamicType) {
+        return commonElements.objectClass;
+      } else if (type is FunctionType) {
+        // TODO(johnniwinther): Include only potential function type subtypes.
+        return commonElements.functionClass;
+      } else if (type is VoidType) {
+        // No classes implied.
+      } else if (type is FunctionTypeVariable) {
+        return impliedClass(type.bound);
+      } else if (type is TypeVariableType) {
+        // TODO(johnniwinther): Can we do better?
+        return impliedClass(
+            _elementEnvironment.getTypeVariableBound(type.element));
       }
+      throw new UnsupportedError('Unexpected type $type');
+    }
 
-      void addClass(ClassEntity cls) {
-        if (cls != null) {
-          classesDirectlyNeedingRuntimeType.add(cls);
-        }
-        if (cls == commonElements.objectClass) {
-          neededOnAll = true;
-        }
-        if (cls == commonElements.functionClass) {
-          neededOnFunctions = true;
-        }
+    void addClass(ClassEntity cls) {
+      if (cls != null) {
+        classesDirectlyNeedingRuntimeType.add(cls);
       }
-
-      for (RuntimeTypeUse runtimeTypeUse in backendUsage.runtimeTypeUses) {
-        switch (runtimeTypeUse.kind) {
-          case RuntimeTypeUseKind.string:
-            if (!options.laxRuntimeTypeToString) {
-              addClass(impliedClass(runtimeTypeUse.receiverType));
-            }
-
-            break;
-          case RuntimeTypeUseKind.equals:
-            ClassEntity receiverClass =
-                impliedClass(runtimeTypeUse.receiverType);
-            ClassEntity argumentClass =
-                impliedClass(runtimeTypeUse.argumentType);
-
-            // TODO(johnniwinther): Special case use of `this.runtimeType`.
-            if (closedWorld.isSubtypeOf(receiverClass, argumentClass)) {
-              addClass(receiverClass);
-            } else if (closedWorld.isSubtypeOf(argumentClass, receiverClass)) {
-              addClass(argumentClass);
-            }
-            if (neededOnAll) break;
-            // TODO(johnniwinther): Special case use of `this.runtimeType`.
-            // TODO(johnniwinther): Rename [commonSubclasses] to something like
-            // [strictCommonClasses] and support the non-strict case directly.
-            // Since we do a subclassesOf
-            classesDirectlyNeedingRuntimeType.addAll(
-                closedWorld.commonSubclasses(receiverClass, ClassQuery.SUBTYPE,
-                    argumentClass, ClassQuery.SUBTYPE));
-            break;
-          case RuntimeTypeUseKind.unknown:
-            addClass(impliedClass(runtimeTypeUse.receiverType));
-            break;
-        }
-        if (neededOnAll) break;
+      if (cls == commonElements.objectClass) {
+        neededOnAll = true;
       }
-      Set<ClassEntity> allClassesNeedingRuntimeType;
-      if (neededOnAll) {
+      if (cls == commonElements.functionClass) {
         neededOnFunctions = true;
-        allClassesNeedingRuntimeType =
-            closedWorld.subclassesOf(commonElements.objectClass).toSet();
-      } else {
-        allClassesNeedingRuntimeType = new Set<ClassEntity>();
-        // TODO(johnniwinther): Support this operation directly in
-        // [ClosedWorld] using the [ClassSet]s.
-        for (ClassEntity cls in classesDirectlyNeedingRuntimeType) {
-          if (!allClassesNeedingRuntimeType.contains(cls)) {
-            allClassesNeedingRuntimeType.addAll(closedWorld.subtypesOf(cls));
+      }
+    }
+
+    for (RuntimeTypeUse runtimeTypeUse in backendUsage.runtimeTypeUses) {
+      switch (runtimeTypeUse.kind) {
+        case RuntimeTypeUseKind.string:
+          if (!options.laxRuntimeTypeToString) {
+            addClass(impliedClass(runtimeTypeUse.receiverType));
           }
+
+          break;
+        case RuntimeTypeUseKind.equals:
+          ClassEntity receiverClass = impliedClass(runtimeTypeUse.receiverType);
+          ClassEntity argumentClass = impliedClass(runtimeTypeUse.argumentType);
+
+          // TODO(johnniwinther): Special case use of `this.runtimeType`.
+          SubclassResult result = closedWorld.classHierarchy.commonSubclasses(
+              receiverClass,
+              ClassQuery.SUBTYPE,
+              argumentClass,
+              ClassQuery.SUBTYPE);
+          switch (result.kind) {
+            case SubclassResultKind.EMPTY:
+              break;
+            case SubclassResultKind.EXACT1:
+            case SubclassResultKind.SUBCLASS1:
+            case SubclassResultKind.SUBTYPE1:
+              addClass(receiverClass);
+              break;
+            case SubclassResultKind.EXACT2:
+            case SubclassResultKind.SUBCLASS2:
+            case SubclassResultKind.SUBTYPE2:
+              addClass(argumentClass);
+              break;
+            case SubclassResultKind.SET:
+              for (ClassEntity cls in result.classes) {
+                addClass(cls);
+                if (neededOnAll) break;
+              }
+              break;
+          }
+          break;
+        case RuntimeTypeUseKind.unknown:
+          addClass(impliedClass(runtimeTypeUse.receiverType));
+          break;
+      }
+      if (neededOnAll) break;
+    }
+    Set<ClassEntity> allClassesNeedingRuntimeType;
+    if (neededOnAll) {
+      neededOnFunctions = true;
+      allClassesNeedingRuntimeType = closedWorld.classHierarchy
+          .subclassesOf(commonElements.objectClass)
+          .toSet();
+    } else {
+      allClassesNeedingRuntimeType = new Set<ClassEntity>();
+      // TODO(johnniwinther): Support this operation directly in
+      // [ClosedWorld] using the [ClassSet]s.
+      for (ClassEntity cls in classesDirectlyNeedingRuntimeType) {
+        if (!allClassesNeedingRuntimeType.contains(cls)) {
+          allClassesNeedingRuntimeType
+              .addAll(closedWorld.classHierarchy.subtypesOf(cls));
         }
       }
-      allClassesNeedingRuntimeType.forEach(potentiallyNeedTypeArguments);
-      if (neededOnFunctions) {
-        for (Local function in resolutionWorldBuilder.genericLocalFunctions) {
-          potentiallyNeedTypeArguments(function);
-        }
-        for (Local function in localFunctions) {
-          FunctionType functionType =
-              _elementEnvironment.getLocalFunctionType(function);
-          functionType.forEachTypeVariable((TypeVariableType typeVariable) {
-            Entity typeDeclaration = typeVariable.element.typeDeclaration;
-            if (!processedEntities.contains(typeDeclaration)) {
-              potentiallyNeedTypeArguments(typeDeclaration);
-            }
-          });
-          localFunctionsNeedingSignature.addAll(localFunctions);
-        }
-        for (FunctionEntity function in resolutionWorldBuilder.genericMethods) {
-          potentiallyNeedTypeArguments(function);
-        }
-        for (FunctionEntity function
-            in resolutionWorldBuilder.closurizedMembersWithFreeTypeVariables) {
-          methodsNeedingSignature.add(function);
-          potentiallyNeedTypeArguments(function.enclosingClass);
-        }
+    }
+    allClassesNeedingRuntimeType.forEach(potentiallyNeedTypeArguments);
+    if (neededOnFunctions) {
+      for (Local function in resolutionWorldBuilder.genericLocalFunctions) {
+        potentiallyNeedTypeArguments(function);
+      }
+      for (Local function in localFunctions) {
+        FunctionType functionType =
+            _elementEnvironment.getLocalFunctionType(function);
+        functionType.forEachTypeVariable((TypeVariableType typeVariable) {
+          Entity typeDeclaration = typeVariable.element.typeDeclaration;
+          if (!processedEntities.contains(typeDeclaration)) {
+            potentiallyNeedTypeArguments(typeDeclaration);
+          }
+        });
+        localFunctionsNeedingSignature.addAll(localFunctions);
+      }
+      for (FunctionEntity function in resolutionWorldBuilder.genericMethods) {
+        potentiallyNeedTypeArguments(function);
+      }
+      for (FunctionEntity function
+          in resolutionWorldBuilder.closurizedMembersWithFreeTypeVariables) {
+        methodsNeedingSignature.add(function);
+        potentiallyNeedTypeArguments(function.enclosingClass);
       }
     }
 
@@ -1763,7 +1742,7 @@ class RuntimeTypesNeedBuilderImpl extends _RuntimeTypesBase
         if (methodsNeedingTypeArguments.contains(target) ||
             localFunctionsNeedingTypeArguments.contains(target)) {
           selectorsNeedingTypeArguments.add(selector);
-          if (cacheRtiDataForTesting) {
+          if (retainDataForTesting) {
             selectorsNeedingTypeArgumentsForTesting ??=
                 <Selector, Set<Entity>>{};
             selectorsNeedingTypeArgumentsForTesting
@@ -1785,7 +1764,7 @@ class RuntimeTypesNeedBuilderImpl extends _RuntimeTypesBase
           // expression.
           instantiationsNeedingTypeArguments
               .add(instantiation.typeArguments.length);
-          if (cacheRtiDataForTesting) {
+          if (retainDataForTesting) {
             instantiationsNeedingTypeArgumentsForTesting ??=
                 <GenericInstantiation, Set<Entity>>{};
             instantiationsNeedingTypeArgumentsForTesting
@@ -1798,7 +1777,7 @@ class RuntimeTypesNeedBuilderImpl extends _RuntimeTypesBase
       }
     });
 
-    if (cacheRtiDataForTesting) {
+    if (retainDataForTesting) {
       typeVariableTestsForTesting = typeVariableTests;
     }
 
@@ -1822,9 +1801,7 @@ class RuntimeTypesNeedBuilderImpl extends _RuntimeTypesBase
     print('selectorsNeedingTypeArguments:');
     selectorsNeedingTypeArguments.forEach((e) => print('  $e'));
     print('instantiationsNeedingTypeArguments: '
-        '$instantiationsNeedingTypeArguments');
-    print('allNeedsTypeArguments=$allNeedsTypeArguments');
-    print('runtimeTypeUsedOnClosures=$runtimeTypeUsedOnClosures');*/
+        '$instantiationsNeedingTypeArguments');*/
 
     return new RuntimeTypesNeedImpl(
         _elementEnvironment,
@@ -1834,21 +1811,27 @@ class RuntimeTypesNeedBuilderImpl extends _RuntimeTypesBase
         localFunctionsNeedingSignature,
         localFunctionsNeedingTypeArguments,
         selectorsNeedingTypeArguments,
-        instantiationsNeedingTypeArguments,
-        allNeedsTypeArguments: allNeedsTypeArguments,
-        runtimeTypeUsedOnClosures: runtimeTypeUsedOnClosures);
+        instantiationsNeedingTypeArguments);
   }
 }
 
 class _RuntimeTypesChecks implements RuntimeTypesChecks {
   final RuntimeTypesSubstitutions _substitutions;
   final TypeChecks requiredChecks;
+  final Iterable<ClassEntity> _typeLiterals;
+  final Iterable<ClassEntity> _typeArguments;
 
-  _RuntimeTypesChecks(this._substitutions, this.requiredChecks);
+  _RuntimeTypesChecks(this._substitutions, this.requiredChecks,
+      this._typeLiterals, this._typeArguments);
 
   @override
   Iterable<ClassEntity> get requiredClasses {
-    return _substitutions.getClassesUsedInSubstitutions(requiredChecks);
+    Set<ClassEntity> required = new Set<ClassEntity>();
+    required.addAll(_typeArguments);
+    required.addAll(_typeLiterals);
+    required
+        .addAll(_substitutions.getClassesUsedInSubstitutions(requiredChecks));
+    return required;
   }
 
   @override
@@ -1875,8 +1858,9 @@ class RuntimeTypesImpl extends _RuntimeTypesBase
 
   RuntimeTypesImpl(this._closedWorld) : super(_closedWorld.dartTypes);
 
-  CommonElements get _commonElements => _closedWorld.commonElements;
-  ElementEnvironment get _elementEnvironment => _closedWorld.elementEnvironment;
+  JCommonElements get _commonElements => _closedWorld.commonElements;
+  JElementEnvironment get _elementEnvironment =>
+      _closedWorld.elementEnvironment;
   RuntimeTypesNeed get _rtiNeed => _closedWorld.rtiNeed;
 
   @override
@@ -1912,61 +1896,84 @@ class RuntimeTypesImpl extends _RuntimeTypesBase
     Set<DartType> implicitIsChecks = typeVariableTests.implicitIsChecks;
 
     Map<ClassEntity, ClassUse> classUseMap = <ClassEntity, ClassUse>{};
-    if (cacheRtiDataForTesting) {
+    if (retainDataForTesting) {
       classUseMapForTesting = classUseMap;
     }
 
     Set<FunctionType> checkedFunctionTypes = new Set<FunctionType>();
+    Set<ClassEntity> typeLiterals = new Set<ClassEntity>();
+    Set<ClassEntity> typeArguments = new Set<ClassEntity>();
 
     TypeVisitor liveTypeVisitor =
-        new TypeVisitor(onClass: (ClassEntity cls, {bool inTypeArgument}) {
+        new TypeVisitor(onClass: (ClassEntity cls, {TypeVisitorState state}) {
       ClassUse classUse = classUseMap.putIfAbsent(cls, () => new ClassUse());
-      if (inTypeArgument) {
-        classUse.typeArgument = true;
+      switch (state) {
+        case TypeVisitorState.typeArgument:
+          classUse.typeArgument = true;
+          typeArguments.add(cls);
+          break;
+        case TypeVisitorState.typeLiteral:
+          classUse.typeLiteral = true;
+          typeLiterals.add(cls);
+          break;
+        case TypeVisitorState.direct:
+          break;
       }
     });
 
     TypeVisitor testedTypeVisitor =
-        new TypeVisitor(onClass: (ClassEntity cls, {bool inTypeArgument}) {
+        new TypeVisitor(onClass: (ClassEntity cls, {TypeVisitorState state}) {
       ClassUse classUse = classUseMap.putIfAbsent(cls, () => new ClassUse());
-      if (inTypeArgument) {
-        classUse.typeArgument = true;
-        classUse.checkedTypeArgument = true;
-      } else {
-        classUse.checkedInstance = true;
+      switch (state) {
+        case TypeVisitorState.typeArgument:
+          classUse.typeArgument = true;
+          classUse.checkedTypeArgument = true;
+          typeArguments.add(cls);
+          break;
+        case TypeVisitorState.typeLiteral:
+          break;
+        case TypeVisitorState.direct:
+          classUse.checkedInstance = true;
+          break;
       }
     });
 
     codegenWorldBuilder.instantiatedTypes.forEach((InterfaceType type) {
-      liveTypeVisitor.visitType(type, false);
+      liveTypeVisitor.visitType(type, TypeVisitorState.direct);
       ClassUse classUse =
           classUseMap.putIfAbsent(type.element, () => new ClassUse());
       classUse.instance = true;
       FunctionType callType = _types.getCallType(type);
       if (callType != null) {
-        testedTypeVisitor.visitType(callType, false);
+        testedTypeVisitor.visitType(callType, TypeVisitorState.direct);
       }
     });
 
     for (FunctionEntity element
         in codegenWorldBuilder.staticFunctionsNeedingGetter) {
       FunctionType functionType = _elementEnvironment.getFunctionType(element);
-      testedTypeVisitor.visitType(functionType, false);
+      testedTypeVisitor.visitType(functionType, TypeVisitorState.direct);
     }
 
     for (FunctionEntity element in codegenWorldBuilder.closurizedMembers) {
       FunctionType functionType = _elementEnvironment.getFunctionType(element);
-      testedTypeVisitor.visitType(functionType, false);
+      testedTypeVisitor.visitType(functionType, TypeVisitorState.direct);
     }
 
     void processMethodTypeArguments(_, Set<DartType> typeArguments) {
       for (DartType typeArgument in typeArguments) {
-        liveTypeVisitor.visit(typeArgument, true);
+        liveTypeVisitor.visit(typeArgument, TypeVisitorState.typeArgument);
       }
     }
 
     codegenWorldBuilder.forEachStaticTypeArgument(processMethodTypeArguments);
     codegenWorldBuilder.forEachDynamicTypeArgument(processMethodTypeArguments);
+    codegenWorldBuilder.liveTypeArguments.forEach((DartType type) {
+      liveTypeVisitor.visitType(type, TypeVisitorState.typeArgument);
+    });
+    codegenWorldBuilder.constTypeLiterals.forEach((DartType type) {
+      liveTypeVisitor.visitType(type, TypeVisitorState.typeLiteral);
+    });
 
     bool isFunctionChecked = false;
 
@@ -1977,61 +1984,35 @@ class RuntimeTypesImpl extends _RuntimeTypesBase
         isFunctionChecked =
             isFunctionChecked || t.element == _commonElements.functionClass;
       }
-      testedTypeVisitor.visitType(t, false);
+      testedTypeVisitor.visitType(t, TypeVisitorState.direct);
     }
 
     explicitIsChecks.forEach(processCheckedType);
     implicitIsChecks.forEach(processCheckedType);
 
-    // In Dart 1, a class that defines a `call` method implicitly has function
-    // type of its `call` method and needs a signature function for testing its
-    // function type against typedefs and function types that are used in
-    // is-checks.
-    //
-    // In Dart 2, a closure class implements the function type of its `call`
+    // A closure class implements the function type of its `call`
     // method and needs a signature function for testing its function type
     // against typedefs and function types that are used in is-checks. Since
     // closures have a signature method iff they need it and should have a
-    // function type iff they have a signature, we process all classes. We know
-    // that the function type is not inherited, so we don't need to process
-    // their super classes.
-    if (isFunctionChecked ||
-        checkedFunctionTypes.isNotEmpty ||
-        options.strongMode) {
-      Set<ClassEntity> processedClasses = new Set<ClassEntity>();
-
-      void processClass(ClassEntity cls) {
-        ClassFunctionType functionType = _computeFunctionType(
-            _elementEnvironment, cls,
-            strongMode: options.strongMode);
-        if (functionType != null) {
-          ClassUse classUse =
-              classUseMap.putIfAbsent(cls, () => new ClassUse());
-          classUse.functionType = functionType;
-        }
-      }
-
-      void processSuperClasses(ClassEntity cls, [ClassUse classUse]) {
-        while (cls != null && processedClasses.add(cls)) {
-          processClass(cls);
-          cls = _elementEnvironment.getSuperClass(cls);
-        }
-      }
-
-      // Collect classes that are 'live' either through instantiation or use in
-      // type arguments.
-      List<ClassEntity> liveClasses = <ClassEntity>[];
-      classUseMap.forEach((ClassEntity cls, ClassUse classUse) {
-        if (classUse.isLive) {
-          liveClasses.add(cls);
-        }
-      });
-      if (options.strongMode) {
-        liveClasses.forEach(processClass);
-      } else {
-        liveClasses.forEach(processSuperClasses);
+    // function type iff they have a signature, we process all classes.
+    void processClass(ClassEntity cls) {
+      ClassFunctionType functionType =
+          _computeFunctionType(_elementEnvironment, cls);
+      if (functionType != null) {
+        ClassUse classUse = classUseMap.putIfAbsent(cls, () => new ClassUse());
+        classUse.functionType = functionType;
       }
     }
+
+    // Collect classes that are 'live' either through instantiation or use in
+    // type arguments.
+    List<ClassEntity> liveClasses = <ClassEntity>[];
+    classUseMap.forEach((ClassEntity cls, ClassUse classUse) {
+      if (classUse.isLive) {
+        liveClasses.add(cls);
+      }
+    });
+    liveClasses.forEach(processClass);
 
     if (options.parameterCheckPolicy.isEmitted) {
       for (FunctionEntity method in codegenWorldBuilder.genericMethods) {
@@ -2041,7 +2022,7 @@ class RuntimeTypesImpl extends _RuntimeTypesBase
             DartType bound =
                 _elementEnvironment.getTypeVariableBound(typeVariable.element);
             processCheckedType(bound);
-            liveTypeVisitor.visit(bound, true);
+            liveTypeVisitor.visit(bound, TypeVisitorState.typeArgument);
           }
         }
       }
@@ -2049,7 +2030,8 @@ class RuntimeTypesImpl extends _RuntimeTypesBase
 
     cachedRequiredChecks = _computeChecks(classUseMap);
     rtiChecksBuilderClosed = true;
-    return new _RuntimeTypesChecks(this, cachedRequiredChecks);
+    return new _RuntimeTypesChecks(
+        this, cachedRequiredChecks, typeArguments, typeLiterals);
   }
 }
 
@@ -2058,19 +2040,18 @@ class RuntimeTypesImpl extends _RuntimeTypesBase
 /// In Dart 1, any class with a `call` method has a function type, in Dart 2
 /// only closure classes have a function type.
 ClassFunctionType _computeFunctionType(
-    ElementEnvironment elementEnvironment, ClassEntity cls,
-    {bool strongMode}) {
+    ElementEnvironment elementEnvironment, ClassEntity cls) {
   FunctionEntity signatureFunction;
   if (cls.isClosure) {
     // Use signature function if available.
     signatureFunction =
         elementEnvironment.lookupLocalClassMember(cls, Identifiers.signature);
-    if (signatureFunction == null && strongMode) {
+    if (signatureFunction == null) {
       // In Dart 2, a closure only needs its function type if it has a
       // signature function.
       return null;
     }
-  } else if (strongMode) {
+  } else {
     // Only closures have function type in Dart 2.
     return null;
   }
@@ -2092,11 +2073,9 @@ class RuntimeTypesEncoderImpl implements RuntimeTypesEncoder {
   final RuntimeTypesNeed _rtiNeed;
 
   RuntimeTypesEncoderImpl(this.namer, NativeBasicData nativeData,
-      this._elementEnvironment, this.commonElements, this._rtiNeed,
-      {bool strongMode})
-      : _representationGenerator = new TypeRepresentationGenerator(
-            namer, nativeData,
-            strongMode: strongMode);
+      this._elementEnvironment, this.commonElements, this._rtiNeed)
+      : _representationGenerator =
+            new TypeRepresentationGenerator(namer, nativeData);
 
   @override
   bool isSimpleFunctionType(FunctionType type) {
@@ -2316,15 +2295,13 @@ class TypeRepresentationGenerator
     implements DartTypeVisitor<jsAst.Expression, Emitter> {
   final Namer namer;
   final NativeBasicData _nativeData;
-  // If true, compile using strong mode.
-  final bool _strongMode;
+
   OnVariableCallback onVariable;
   ShouldEncodeTypedefCallback shouldEncodeTypedef;
   Map<TypeVariableType, jsAst.Expression> typedefBindings;
   List<FunctionTypeVariable> functionTypeVariables = <FunctionTypeVariable>[];
 
-  TypeRepresentationGenerator(this.namer, this._nativeData, {bool strongMode})
-      : _strongMode = strongMode;
+  TypeRepresentationGenerator(this.namer, this._nativeData);
 
   /**
    * Creates a type representation for [type]. [onVariable] is called to provide
@@ -2361,9 +2338,6 @@ class TypeRepresentationGenerator
 
   jsAst.Expression visitTypeVariableType(
       TypeVariableType type, Emitter emitter) {
-    if (!_strongMode && type.element.typeDeclaration is! ClassEntity) {
-      return getDynamicValue();
-    }
     if (typedefBindings != null) {
       assert(typedefBindings[type] != null);
       return typedefBindings[type];
@@ -2397,7 +2371,7 @@ class TypeRepresentationGenerator
   jsAst.Expression visitInterfaceType(InterfaceType type, Emitter emitter) {
     jsAst.Expression name = getJavaScriptClassName(type.element, emitter);
     jsAst.Expression result;
-    if (type.treatAsRaw) {
+    if (type.typeArguments.isEmpty) {
       result = name;
     } else {
       // Visit all type arguments. This is done even for jsinterop classes to
@@ -2482,9 +2456,7 @@ class TypeRepresentationGenerator
           visitList(type.typeVariables.map((v) => v.bound).toList(), emitter));
     }
 
-    if (!_strongMode && type.returnType.isVoid) {
-      addProperty(namer.functionTypeVoidReturnTag, js('true'));
-    } else if (!type.returnType.treatAsDynamic) {
+    if (!type.returnType.treatAsDynamic) {
       addProperty(
           namer.functionTypeReturnTypeTag, visit(type.returnType, emitter));
     }
@@ -2519,7 +2491,7 @@ class TypeRepresentationGenerator
   }
 
   jsAst.Expression visitVoidType(VoidType type, Emitter emitter) {
-    return _strongMode ? getVoidValue() : getDynamicValue();
+    return getVoidValue();
   }
 
   jsAst.Expression visitTypedefType(TypedefType type, Emitter emitter) {
@@ -2754,64 +2726,73 @@ class TypeCheck {
       'TypeCheck(cls=$cls,needsIs=$needsIs,substitution=$substitution)';
 }
 
-class TypeVisitor extends DartTypeVisitor<void, bool> {
+enum TypeVisitorState { direct, typeArgument, typeLiteral }
+
+class TypeVisitor extends DartTypeVisitor<void, TypeVisitorState> {
   Set<FunctionTypeVariable> _visitedFunctionTypeVariables =
       new Set<FunctionTypeVariable>();
 
-  final void Function(ClassEntity entity, {bool inTypeArgument}) onClass;
-  final void Function(TypeVariableEntity entity, {bool inTypeArgument})
+  final void Function(ClassEntity entity, {TypeVisitorState state}) onClass;
+  final void Function(TypeVariableEntity entity, {TypeVisitorState state})
       onTypeVariable;
-  final void Function(FunctionType type, {bool inTypeArgument}) onFunctionType;
+  final void Function(FunctionType type, {TypeVisitorState state})
+      onFunctionType;
 
   TypeVisitor({this.onClass, this.onTypeVariable, this.onFunctionType});
 
-  visitType(DartType type, bool inTypeArgument) =>
-      type.accept(this, inTypeArgument);
+  visitType(DartType type, TypeVisitorState state) => type.accept(this, state);
 
-  visitTypes(List<DartType> types, bool inTypeArgument) {
+  visitTypes(List<DartType> types, TypeVisitorState state) {
     for (DartType type in types) {
-      visitType(type, inTypeArgument);
+      visitType(type, state);
     }
   }
 
   @override
-  void visitTypeVariableType(TypeVariableType type, bool inTypeArgument) {
+  void visitTypeVariableType(TypeVariableType type, TypeVisitorState state) {
     if (onTypeVariable != null) {
-      onTypeVariable(type.element, inTypeArgument: inTypeArgument);
+      onTypeVariable(type.element, state: state);
     }
   }
 
   @override
-  visitInterfaceType(InterfaceType type, bool inTypeArgument) {
+  visitInterfaceType(InterfaceType type, TypeVisitorState state) {
     if (onClass != null) {
-      onClass(type.element, inTypeArgument: inTypeArgument);
+      onClass(type.element, state: state);
     }
-    visitTypes(type.typeArguments, true);
+    visitTypes(
+        type.typeArguments,
+        state == TypeVisitorState.typeLiteral
+            ? state
+            : TypeVisitorState.typeArgument);
   }
 
   @override
-  visitFunctionType(FunctionType type, bool inTypeArgument) {
+  visitFunctionType(FunctionType type, TypeVisitorState state) {
     if (onFunctionType != null) {
-      onFunctionType(type, inTypeArgument: inTypeArgument);
+      onFunctionType(type, state: state);
     }
     // Visit all nested types as type arguments; these types are not runtime
     // instances but runtime type representations.
-    visitType(type.returnType, true);
-    visitTypes(type.parameterTypes, true);
-    visitTypes(type.optionalParameterTypes, true);
-    visitTypes(type.namedParameterTypes, true);
+    state = state == TypeVisitorState.typeLiteral
+        ? state
+        : TypeVisitorState.typeArgument;
+    visitType(type.returnType, state);
+    visitTypes(type.parameterTypes, state);
+    visitTypes(type.optionalParameterTypes, state);
+    visitTypes(type.namedParameterTypes, state);
     _visitedFunctionTypeVariables.removeAll(type.typeVariables);
   }
 
   @override
-  visitTypedefType(TypedefType type, bool inTypeArgument) {
-    visitType(type.unaliased, inTypeArgument);
+  visitTypedefType(TypedefType type, TypeVisitorState state) {
+    visitType(type.unaliased, state);
   }
 
   @override
-  visitFunctionTypeVariable(FunctionTypeVariable type, bool inTypeArgument) {
+  visitFunctionTypeVariable(FunctionTypeVariable type, TypeVisitorState state) {
     if (_visitedFunctionTypeVariables.add(type)) {
-      visitType(type.bound, inTypeArgument);
+      visitType(type.bound, state);
     }
   }
 }
@@ -2835,8 +2816,6 @@ class ClassChecks {
   TypeCheck operator [](ClassEntity cls) => _map[cls];
 
   Iterable<TypeCheck> get checks => _map.values;
-
-  bool get isNotEmpty => _map.isNotEmpty;
 
   String toString() {
     return 'ClassChecks($checks)';
@@ -2898,6 +2877,15 @@ class ClassUse {
   ///
   bool checkedTypeArgument = false;
 
+  /// Whether the class is used in a constant type literal.
+  ///
+  /// For instance `A`:
+  ///
+  ///     class A {}
+  ///     main() => A;
+  ///
+  bool typeLiteral = false;
+
   /// The function type of the class, if any.
   ///
   /// This is only set if the function type is needed at runtime. For instance,
@@ -2925,6 +2913,9 @@ class ClassUse {
     }
     if (checkedTypeArgument) {
       properties.add('checkedTypeArgument');
+    }
+    if (typeLiteral) {
+      properties.add('rtiValue');
     }
     if (functionType != null) {
       properties.add('functionType');

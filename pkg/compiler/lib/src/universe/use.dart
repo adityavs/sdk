@@ -24,6 +24,7 @@ import '../js_model/closure.dart';
 import '../util/util.dart' show equalElements, Hashing;
 import 'call_structure.dart' show CallStructure;
 import 'selector.dart' show Selector;
+import 'world_builder.dart' show StrongModeConstraint;
 
 enum DynamicUseKind {
   INVOKE,
@@ -42,6 +43,15 @@ class DynamicUse {
   /// Short textual representation use for testing.
   String get shortText {
     StringBuffer sb = new StringBuffer();
+    if (receiverConstraint != null) {
+      var constraint = receiverConstraint;
+      if (constraint is StrongModeConstraint) {
+        sb.write(constraint.cls.name);
+      } else {
+        sb.write(constraint);
+      }
+      sb.write('.');
+    }
     sb.write(selector.name);
     if (typeArguments != null && typeArguments.isNotEmpty) {
       sb.write('<');
@@ -141,7 +151,6 @@ enum StaticUseKind {
   CONST_CONSTRUCTOR_INVOKE,
   REDIRECTION,
   DIRECT_INVOKE,
-  DIRECT_USE,
   INLINING,
   INVOKE,
   GET,
@@ -517,11 +526,6 @@ class StaticUse {
     return new StaticUse.internal(element, StaticUseKind.INVOKE);
   }
 
-  /// Direct use of [element] as done with `--analyze-all` and `--analyze-main`.
-  factory StaticUse.directUse(MemberEntity element) {
-    return new StaticUse.internal(element, StaticUseKind.DIRECT_USE);
-  }
-
   /// Inlining of [element].
   factory StaticUse.constructorInlining(
       ConstructorEntity element, InterfaceType instanceType) {
@@ -574,14 +578,14 @@ class GenericStaticUse extends StaticUse {
 enum TypeUseKind {
   IS_CHECK,
   AS_CAST,
-  CHECKED_MODE_CHECK,
   CATCH_TYPE,
   TYPE_LITERAL,
   INSTANTIATION,
-  MIRROR_INSTANTIATION,
   NATIVE_INSTANTIATION,
   IMPLICIT_CAST,
   PARAMETER_CHECK,
+  RTI_VALUE,
+  TYPE_ARGUMENT,
 }
 
 /// Use of a [DartType].
@@ -605,9 +609,6 @@ class TypeUse {
       case TypeUseKind.AS_CAST:
         sb.write('as:');
         break;
-      case TypeUseKind.CHECKED_MODE_CHECK:
-        sb.write('check:');
-        break;
       case TypeUseKind.CATCH_TYPE:
         sb.write('catch:');
         break;
@@ -617,9 +618,6 @@ class TypeUse {
       case TypeUseKind.INSTANTIATION:
         sb.write('inst:');
         break;
-      case TypeUseKind.MIRROR_INSTANTIATION:
-        sb.write('mirror:');
-        break;
       case TypeUseKind.NATIVE_INSTANTIATION:
         sb.write('native:');
         break;
@@ -628,6 +626,12 @@ class TypeUse {
         break;
       case TypeUseKind.PARAMETER_CHECK:
         sb.write('param:');
+        break;
+      case TypeUseKind.RTI_VALUE:
+        sb.write('rti:');
+        break;
+      case TypeUseKind.TYPE_ARGUMENT:
+        sb.write('typeArg:');
         break;
     }
     sb.write(type);
@@ -642,11 +646,6 @@ class TypeUse {
   /// [type] used in an as cast, like `e as T`.
   factory TypeUse.asCast(DartType type) {
     return new TypeUse.internal(type, TypeUseKind.AS_CAST);
-  }
-
-  /// [type] used as a type annotation in Dart 1, like `T foo;`.
-  factory TypeUse.checkedModeCheck(DartType type) {
-    return new TypeUse.internal(type, TypeUseKind.CHECKED_MODE_CHECK);
   }
 
   /// [type] used as a parameter type or field type in Dart 2, like `T` in:
@@ -682,14 +681,29 @@ class TypeUse {
     return new TypeUse.internal(type, TypeUseKind.INSTANTIATION);
   }
 
-  /// [type] used in an instantiation through mirrors.
-  factory TypeUse.mirrorInstantiation(InterfaceType type) {
-    return new TypeUse.internal(type, TypeUseKind.MIRROR_INSTANTIATION);
-  }
-
   /// [type] used in a native instantiation.
   factory TypeUse.nativeInstantiation(InterfaceType type) {
     return new TypeUse.internal(type, TypeUseKind.NATIVE_INSTANTIATION);
+  }
+
+  /// [type] used as a direct RTI value.
+  factory TypeUse.constTypeLiteral(DartType type) {
+    return new TypeUse.internal(type, TypeUseKind.RTI_VALUE);
+  }
+
+  /// [type] used in a `instanceof` check.
+  factory TypeUse.instanceConstructor(DartType type) {
+    // TODO(johnniwinther,sra): Use a separate use kind if constructors is no
+    // longer used for RTI.
+    return new TypeUse.internal(type, TypeUseKind.RTI_VALUE);
+  }
+
+  /// [type] used directly as a type argument.
+  ///
+  /// The happens during optimization where a type variable can be replaced by
+  /// an invariable type argument derived from a constant receiver.
+  factory TypeUse.typeArgument(DartType type) {
+    return new TypeUse.internal(type, TypeUseKind.TYPE_ARGUMENT);
   }
 
   bool operator ==(other) {

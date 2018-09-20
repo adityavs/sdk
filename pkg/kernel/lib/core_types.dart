@@ -83,6 +83,7 @@ class CoreTypes {
   Class _asyncAwaitCompleterClass;
   Class _futureOrClass;
   Constructor _asyncAwaitCompleterConstructor;
+  Procedure _completeOnAsyncReturnProcedure;
   Procedure _completerSyncConstructor;
   Procedure _completerComplete;
   Procedure _completerCompleteError;
@@ -90,10 +91,13 @@ class CoreTypes {
   Constructor _syncIterableDefaultConstructor;
   Constructor _streamIteratorDefaultConstructor;
   Constructor _asyncStarStreamControllerDefaultConstructor;
+  Procedure _asyncStarListenHelperProcedure;
+  Procedure _asyncStarMoveNextHelperProcedure;
   Procedure _asyncStackTraceHelperProcedure;
   Procedure _asyncThenWrapperHelperProcedure;
   Procedure _asyncErrorWrapperHelperProcedure;
   Procedure _awaitHelperProcedure;
+  Procedure _boolFromEnvironment;
 
   /// The `dart:mirrors` library, or `null` if the component does not use it.
   Library _mirrorsLibrary;
@@ -146,6 +150,16 @@ class CoreTypes {
         'dart:async', '_AsyncStarStreamController', 'get:stream');
   }
 
+  Procedure get asyncStarListenHelper {
+    return _asyncStarListenHelperProcedure ??=
+        index.getTopLevelMember('dart:async', '_asyncStarListenHelper');
+  }
+
+  Procedure get asyncStarMoveNextHelper {
+    return _asyncStarMoveNextHelperProcedure ??=
+        index.getTopLevelMember('dart:async', '_asyncStarMoveNextHelper');
+  }
+
   Procedure get asyncStackTraceHelperProcedure {
     return _asyncStackTraceHelperProcedure ??=
         index.getTopLevelMember('dart:async', '_asyncStackTraceHelper');
@@ -182,6 +196,11 @@ class CoreTypes {
   Constructor get asyncAwaitCompleterConstructor {
     return _asyncAwaitCompleterConstructor ??=
         index.getMember('dart:async', '_AsyncAwaitCompleter', '');
+  }
+
+  Member get completeOnAsyncReturn {
+    return _completeOnAsyncReturnProcedure ??=
+        index.getTopLevelMember('dart:async', '_completeOnAsyncReturn');
   }
 
   Procedure get completerComplete {
@@ -423,5 +442,10 @@ class CoreTypes {
   Constructor get compileTimeErrorDefaultConstructor {
     return _compileTimeErrorDefaultConstructor ??=
         index.getMember('dart:core', '_CompileTimeError', '');
+  }
+
+  Procedure get boolFromEnvironment {
+    return _boolFromEnvironment ??=
+        index.getMember('dart:core', 'bool', 'fromEnvironment');
   }
 }

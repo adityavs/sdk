@@ -10,8 +10,12 @@ import "dart:io" show File;
 
 import "dart:typed_data" show Uint8List;
 
+import "package:kernel/target/targets.dart" show TargetFlags;
+
 import "package:testing/testing.dart"
     show Chain, ChainContext, Result, Step, TestDescription, runMe;
+
+import "package:vm/target/vm.dart" show VmTarget;
 
 import "package:yaml/yaml.dart" show YamlList, YamlMap, YamlNode, loadYamlNode;
 
@@ -86,9 +90,9 @@ class MessageTestSuite extends ChainContext {
       String externalTest;
       bool frontendInternal = false;
       String analyzerCode;
-      String dart2jsCode;
       Severity severity;
       YamlNode badSeverity;
+      YamlNode unnecessarySeverity;
 
       for (String key in message.keys) {
         YamlNode node = message.nodes[key];
@@ -102,6 +106,8 @@ class MessageTestSuite extends ChainContext {
             severity = severityEnumValues[value];
             if (severity == null) {
               badSeverity = node;
+            } else if (severity == Severity.error) {
+              unnecessarySeverity = node;
             }
             break;
 
@@ -111,10 +117,6 @@ class MessageTestSuite extends ChainContext {
 
           case "analyzerCode":
             analyzerCode = value;
-            break;
-
-          case "dart2jsCode":
-            dart2jsCode = value;
             break;
 
           case "bytes":
@@ -181,6 +183,10 @@ class MessageTestSuite extends ChainContext {
             externalTest = node.value;
             break;
 
+          case "index":
+            // index is validated during generation
+            break;
+
           default:
             unknownKeys.add(key);
         }
@@ -193,7 +199,7 @@ class MessageTestSuite extends ChainContext {
         if (problem != null) {
           String filename = relativize(uri);
           location ??= message.span.start;
-          int line = location.line;
+          int line = location.line + 1;
           int column = location.column;
           problem = "$filename:$line:$column: error:\n$problem";
         }
@@ -219,6 +225,14 @@ class MessageTestSuite extends ChainContext {
               ? "Unknown severity: '${badSeverity.value}'."
               : null,
           location: badSeverity?.span?.start);
+
+      yield createDescription(
+          "unnecessarySeverity",
+          null,
+          unnecessarySeverity != null
+              ? "The 'ERROR' severity is the default and not necessary."
+              : null,
+          location: unnecessarySeverity?.span?.start);
 
       bool exampleAndAnalyzerCodeRequired = severity != Severity.context &&
           severity != Severity.internalProblem &&
@@ -256,17 +270,6 @@ class MessageTestSuite extends ChainContext {
                   " on an example to find the code."
                   " The code is printed just before the file name."
               : null);
-
-      yield createDescription(
-          "dart2jsCode",
-          null,
-          exampleAndAnalyzerCodeRequired &&
-                  !frontendInternal &&
-                  analyzerCode != null &&
-                  dart2jsCode == null
-              ? "No dart2js code for $name."
-                  " Try using *ignored* or *fatal*"
-              : null);
     }
   }
 
@@ -276,7 +279,7 @@ class MessageTestSuite extends ChainContext {
     buffer
       ..write(relativize(span.sourceUrl))
       ..write(":")
-      ..write(span.start.line)
+      ..write(span.start.line + 1)
       ..write(":")
       ..write(span.start.column)
       ..write(": error: ")
@@ -318,7 +321,7 @@ class BytesExample extends Example {
   final Uint8List bytes;
 
   BytesExample(String name, String code, this.node)
-      : bytes = new Uint8List.fromList(node.value),
+      : bytes = new Uint8List.fromList(node.cast<int>()),
         super(name, code);
 }
 
@@ -455,6 +458,7 @@ class Compile extends Step<Example, Null, MessageTestSuite> {
         new CompilerOptions()
           ..sdkSummary = computePlatformBinariesLocation()
               .resolve("vm_platform_strong.dill")
+          ..target = new VmTarget(new TargetFlags(strongMode: true))
           ..fileSystem = new HybridFileSystem(suite.fileSystem)
           ..onProblem = (FormattedMessage problem, Severity severity,
               List<FormattedMessage> context) {

@@ -1377,6 +1377,16 @@ void LICM::Optimize() {
       BlockEntryInstr* block = flow_graph()->preorder()[loop_it.Current()];
       for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
         Instruction* current = it.Current();
+
+        // Treat loads of static final fields specially: we can CSE them but
+        // we should not move them around unless the field is initialized.
+        // Otherwise we might move load past the initialization.
+        if (LoadStaticFieldInstr* load = current->AsLoadStaticField()) {
+          if (load->AllowsCSE() && !load->IsFieldInitialized()) {
+            continue;
+          }
+        }
+
         if ((current->AllowsCSE() ||
              IsLoopInvariantLoad(loop_invariant_loads, i, current)) &&
             !current->MayThrow()) {
@@ -2473,7 +2483,7 @@ class StoreOptimizer : public LivenessAnalysis {
 
         // Handle side effects, deoptimization and function return.
         if (instr->HasUnknownSideEffects() || instr->CanDeoptimize() ||
-            instr->IsThrow() || instr->IsReThrow() || instr->IsReturn()) {
+            instr->MayThrow() || instr->IsReturn()) {
           // Instructions that return from the function, instructions with side
           // effects and instructions that can deoptimize are considered as
           // loads from all places.
@@ -2559,6 +2569,16 @@ void DeadStoreElimination::Optimize(FlowGraph* graph) {
   }
 }
 
+//
+// Allocation Sinking
+//
+
+// Returns true if the given instruction is an allocation that
+// can be sunk by the Allocation Sinking pass.
+static bool IsSupportedAllocation(Instruction* instr) {
+  return instr->IsAllocateObject() || instr->IsAllocateUninitializedContext();
+}
+
 enum SafeUseCheck { kOptimisticCheck, kStrictCheck };
 
 // Check if the use is safe for allocation sinking. Allocation sinking
@@ -2590,7 +2610,7 @@ static bool IsSafeUse(Value* use, SafeUseCheck check_type) {
   if (store != NULL) {
     if (use == store->value()) {
       Definition* instance = store->instance()->definition();
-      return instance->IsAllocateObject() &&
+      return IsSupportedAllocation(instance) &&
              ((check_type == kOptimisticCheck) ||
               instance->Identity().IsAllocationSinkingCandidate());
     }
@@ -2603,7 +2623,6 @@ static bool IsSafeUse(Value* use, SafeUseCheck check_type) {
 // Right now we are attempting to sink allocation only into
 // deoptimization exit. So candidate should only be used in StoreInstanceField
 // instructions that write into fields of the allocated object.
-// We do not support materialization of the object that has type arguments.
 static bool IsAllocationSinkingCandidate(Definition* alloc,
                                          SafeUseCheck check_type) {
   for (Value* use = alloc->input_use_list(); use != NULL;
@@ -2674,22 +2693,15 @@ void AllocationSinking::CollectCandidates() {
        !block_it.Done(); block_it.Advance()) {
     BlockEntryInstr* block = block_it.Current();
     for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
-      {
-        AllocateObjectInstr* alloc = it.Current()->AsAllocateObject();
-        if ((alloc != NULL) &&
-            IsAllocationSinkingCandidate(alloc, kOptimisticCheck)) {
-          alloc->SetIdentity(AliasIdentity::AllocationSinkingCandidate());
-          candidates_.Add(alloc);
-        }
+      Instruction* current = it.Current();
+      if (!IsSupportedAllocation(current)) {
+        continue;
       }
-      {
-        AllocateUninitializedContextInstr* alloc =
-            it.Current()->AsAllocateUninitializedContext();
-        if ((alloc != NULL) &&
-            IsAllocationSinkingCandidate(alloc, kOptimisticCheck)) {
-          alloc->SetIdentity(AliasIdentity::AllocationSinkingCandidate());
-          candidates_.Add(alloc);
-        }
+
+      Definition* alloc = current->Cast<Definition>();
+      if (IsAllocationSinkingCandidate(alloc, kOptimisticCheck)) {
+        alloc->SetIdentity(AliasIdentity::AllocationSinkingCandidate());
+        candidates_.Add(alloc);
       }
     }
   }

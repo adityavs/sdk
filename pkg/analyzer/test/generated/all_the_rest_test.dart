@@ -209,9 +209,9 @@ void main() {
 
   test_locate_CompilationUnit() async {
     CompilationUnit cu = await _resolveContents("// only comment");
-    expect(cu.element, isNotNull);
+    expect(cu.declaredElement, isNotNull);
     Element element = ElementLocator.locate(cu);
-    expect(element, same(cu.element));
+    expect(element, same(cu.declaredElement));
   }
 
   test_locate_ConstructorDeclaration() async {
@@ -578,8 +578,8 @@ class EnumMemberBuilderTest extends EngineTestCase {
     String firstName = "ONE";
     String secondName = "TWO";
     String thirdName = "THREE";
-    EnumDeclaration enumDeclaration = AstTestFactory
-        .enumDeclaration2("E", [firstName, secondName, thirdName]);
+    EnumDeclaration enumDeclaration = AstTestFactory.enumDeclaration2(
+        "E", [firstName, secondName, thirdName]);
 
     ClassElement enumElement = _buildElement(enumDeclaration);
     List<FieldElement> fields = enumElement.fields;
@@ -611,8 +611,8 @@ class EnumMemberBuilderTest extends EngineTestCase {
     String firstName = "ONE";
     EnumDeclaration enumDeclaration =
         AstTestFactory.enumDeclaration2("E", [firstName]);
-    enumDeclaration.constants[0].documentationComment = AstTestFactory
-        .documentationComment(
+    enumDeclaration.constants[0].documentationComment =
+        AstTestFactory.documentationComment(
             [TokenFactory.tokenFromString('/// aaa')..offset = 50], []);
 
     ClassElement enumElement = _buildElement(enumDeclaration);
@@ -694,9 +694,7 @@ class ErrorReporterTest extends EngineTestCase {
     GatheringErrorListener listener = new GatheringErrorListener();
     ErrorReporter reporter = new ErrorReporter(listener, element.source);
     reporter.reportErrorForElement(
-        StaticWarningCode.CONFLICTING_INSTANCE_GETTER_AND_SUPERCLASS_MEMBER,
-        element,
-        ['A']);
+        StaticWarningCode.CAST_TO_NON_TYPE, element, ['A']);
     AnalysisError error = listener.errors[0];
     expect(error.offset, element.nameOffset);
   }
@@ -710,9 +708,7 @@ class ErrorReporterTest extends EngineTestCase {
         new NonExistingSource(
             '/test.dart', path.toUri('/test.dart'), UriKind.FILE_URI));
     reporter.reportErrorForElement(
-        StaticWarningCode.CONFLICTING_INSTANCE_GETTER_AND_SUPERCLASS_MEMBER,
-        element,
-        ['A']);
+        StaticWarningCode.CAST_TO_NON_TYPE, element, ['A']);
     AnalysisError error = listener.errors[0];
     expect(error.offset, element.nameOffset);
   }

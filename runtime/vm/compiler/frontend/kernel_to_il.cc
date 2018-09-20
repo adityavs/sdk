@@ -19,8 +19,8 @@
 #include "vm/stack_frame.h"
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
-namespace dart {
 
+namespace dart {
 namespace kernel {
 
 #define Z (zone_)
@@ -28,156 +28,28 @@ namespace kernel {
 #define T (type_translator_)
 #define I Isolate::Current()
 
-ActiveTypeParametersScope::ActiveTypeParametersScope(ActiveClass* active_class,
-                                                     const Function& innermost,
-                                                     Zone* Z)
-    : active_class_(active_class), saved_(*active_class) {
-  active_class_->enclosing = &innermost;
-
-  intptr_t num_params = 0;
-
-  Function& f = Function::Handle(Z);
-  TypeArguments& f_params = TypeArguments::Handle(Z);
-  for (f = innermost.raw(); f.parent_function() != Object::null();
-       f = f.parent_function()) {
-    f_params = f.type_parameters();
-    num_params += f_params.Length();
-  }
-  if (num_params == 0) return;
-
-  TypeArguments& params =
-      TypeArguments::Handle(Z, TypeArguments::New(num_params));
-
-  intptr_t index = num_params;
-  for (f = innermost.raw(); f.parent_function() != Object::null();
-       f = f.parent_function()) {
-    f_params = f.type_parameters();
-    for (intptr_t j = f_params.Length() - 1; j >= 0; --j) {
-      params.SetTypeAt(--index, AbstractType::Handle(Z, f_params.TypeAt(j)));
-    }
-  }
-
-  active_class_->local_type_parameters = &params;
-}
-
-ActiveTypeParametersScope::ActiveTypeParametersScope(
-    ActiveClass* active_class,
-    const Function* function,
-    const TypeArguments& new_params,
-    Zone* Z)
-    : active_class_(active_class), saved_(*active_class) {
-  active_class_->enclosing = function;
-
-  if (new_params.IsNull()) return;
-
-  const TypeArguments* old_params = active_class->local_type_parameters;
-  const intptr_t old_param_count =
-      old_params == NULL ? 0 : old_params->Length();
-  const TypeArguments& extended_params = TypeArguments::Handle(
-      Z, TypeArguments::New(old_param_count + new_params.Length()));
-
-  intptr_t index = 0;
-  for (intptr_t i = 0; i < old_param_count; ++i) {
-    extended_params.SetTypeAt(
-        index++, AbstractType::ZoneHandle(Z, old_params->TypeAt(i)));
-  }
-  for (intptr_t i = 0; i < new_params.Length(); ++i) {
-    extended_params.SetTypeAt(
-        index++, AbstractType::ZoneHandle(Z, new_params.TypeAt(i)));
-  }
-
-  active_class_->local_type_parameters = &extended_params;
-}
-
-Fragment& Fragment::operator+=(const Fragment& other) {
-  if (entry == NULL) {
-    entry = other.entry;
-    current = other.current;
-  } else if (current != NULL && other.entry != NULL) {
-    current->LinkTo(other.entry);
-    current = other.current;
-  }
-  return *this;
-}
-
-Fragment& Fragment::operator<<=(Instruction* next) {
-  if (entry == NULL) {
-    entry = current = next;
-  } else if (current != NULL) {
-    current->LinkTo(next);
-    current = next;
-  }
-  return *this;
-}
-
-void Fragment::Prepend(Instruction* start) {
-  if (entry == NULL) {
-    entry = current = start;
-  } else {
-    start->LinkTo(entry);
-    entry = start;
-  }
-}
-
-Fragment Fragment::closed() {
-  ASSERT(entry != NULL);
-  return Fragment(entry, NULL);
-}
-
-Fragment operator+(const Fragment& first, const Fragment& second) {
-  Fragment result = first;
-  result += second;
-  return result;
-}
-
-Fragment operator<<(const Fragment& fragment, Instruction* next) {
-  Fragment result = fragment;
-  result <<= next;
-  return result;
-}
-
-intptr_t ActiveClass::MemberTypeParameterCount(Zone* zone) {
-  ASSERT(member != NULL);
-  if (member->IsFactory()) {
-    TypeArguments& class_types =
-        TypeArguments::Handle(zone, klass->type_parameters());
-    return class_types.Length();
-  } else if (member->IsMethodExtractor()) {
-    Function& extracted =
-        Function::Handle(zone, member->extracted_method_closure());
-    TypeArguments& function_types =
-        TypeArguments::Handle(zone, extracted.type_parameters());
-    return function_types.Length();
-  } else {
-    TypeArguments& function_types =
-        TypeArguments::Handle(zone, member->type_parameters());
-    return function_types.Length();
-  }
-}
-
 FlowGraphBuilder::FlowGraphBuilder(
-    intptr_t kernel_offset,
     ParsedFunction* parsed_function,
-    const ZoneGrowableArray<const ICData*>& ic_data_array,
+    ZoneGrowableArray<const ICData*>* ic_data_array,
     ZoneGrowableArray<intptr_t>* context_level_array,
     InlineExitCollector* exit_collector,
     bool optimizing,
     intptr_t osr_id,
-    intptr_t first_block_id)
+    intptr_t first_block_id,
+    bool inlining_unchecked_entry)
     : BaseFlowGraphBuilder(parsed_function,
                            first_block_id - 1,
-                           context_level_array),
+                           osr_id,
+                           context_level_array,
+                           exit_collector,
+                           inlining_unchecked_entry),
       translation_helper_(Thread::Current()),
       thread_(translation_helper_.thread()),
       zone_(translation_helper_.zone()),
-      kernel_offset_(kernel_offset),
       parsed_function_(parsed_function),
       optimizing_(optimizing),
-      osr_id_(osr_id),
-      ic_data_array_(ic_data_array),
-      exit_collector_(exit_collector),
+      ic_data_array_(*ic_data_array),
       next_function_id_(0),
-      loop_depth_(0),
       try_depth_(0),
       catch_depth_(0),
       for_in_depth_(0),
@@ -185,75 +57,15 @@ FlowGraphBuilder::FlowGraphBuilder(
       scopes_(NULL),
       breakable_block_(NULL),
       switch_block_(NULL),
+      try_catch_block_(NULL),
       try_finally_block_(NULL),
-      catch_block_(NULL),
-      streaming_flow_graph_builder_(NULL) {
+      catch_block_(NULL) {
   const Script& script =
       Script::Handle(Z, parsed_function->function().script());
   H.InitFromScript(script);
 }
 
 FlowGraphBuilder::~FlowGraphBuilder() {}
-
-Fragment FlowGraphBuilder::TranslateFinallyFinalizers(
-    TryFinallyBlock* outer_finally,
-    intptr_t target_context_depth) {
-  TryFinallyBlock* const saved_block = try_finally_block_;
-  TryCatchBlock* const saved_try_catch_block = try_catch_block_;
-  const intptr_t saved_depth = context_depth_;
-  const intptr_t saved_try_depth = try_depth_;
-
-  Fragment instructions;
-
-  // While translating the body of a finalizer we need to set the try-finally
-  // block which is active when translating the body.
-  while (try_finally_block_ != outer_finally) {
-    // Set correct try depth (in case there are nested try statements).
-    try_depth_ = try_finally_block_->try_depth();
-
-    // Potentially restore the context to what is expected for the finally
-    // block.
-    instructions += AdjustContextTo(try_finally_block_->context_depth());
-
-    // The to-be-translated finalizer has to have the correct try-index (namely
-    // the one outside the try-finally block).
-    bool changed_try_index = false;
-    intptr_t target_try_index = try_finally_block_->try_index();
-    while (CurrentTryIndex() != target_try_index) {
-      try_catch_block_ = try_catch_block_->outer();
-      changed_try_index = true;
-    }
-    if (changed_try_index) {
-      JoinEntryInstr* entry = BuildJoinEntry();
-      instructions += Goto(entry);
-      instructions = Fragment(instructions.entry, entry);
-    }
-
-    intptr_t finalizer_kernel_offset =
-        try_finally_block_->finalizer_kernel_offset();
-    try_finally_block_ = try_finally_block_->outer();
-    instructions += streaming_flow_graph_builder_->BuildStatementAt(
-        finalizer_kernel_offset);
-
-    // We only need to make sure that if the finalizer ended normally, we
-    // continue towards the next outer try-finally.
-    if (!instructions.is_open()) break;
-  }
-
-  if (instructions.is_open() && target_context_depth != -1) {
-    // A target context depth of -1 indicates that the code after this
-    // will not care about the context chain so we can leave it any way we
-    // want after the last finalizer.  That is used when returning.
-    instructions += AdjustContextTo(target_context_depth);
-  }
-
-  try_finally_block_ = saved_block;
-  try_catch_block_ = saved_try_catch_block;
-  context_depth_ = saved_depth;
-  try_depth_ = saved_try_depth;
-
-  return instructions;
-}
 
 Fragment FlowGraphBuilder::EnterScope(intptr_t kernel_offset,
                                       intptr_t* num_context_variables) {
@@ -276,16 +88,6 @@ Fragment FlowGraphBuilder::ExitScope(intptr_t kernel_offset) {
       scopes_->scopes.Lookup(kernel_offset)->num_context_variables();
   if (context_size > 0) {
     instructions += PopContext();
-  }
-  return instructions;
-}
-
-Fragment BaseFlowGraphBuilder::LoadContextAt(int depth) {
-  intptr_t delta = context_depth_ - depth;
-  ASSERT(delta >= 0);
-  Fragment instructions = LoadLocal(parsed_function_->current_context_var());
-  while (delta-- > 0) {
-    instructions += LoadField(Context::parent_offset());
   }
   return instructions;
 }
@@ -337,12 +139,9 @@ Fragment FlowGraphBuilder::LoadInstantiatorTypeArguments() {
   } else if (scopes_->this_variable != NULL &&
              active_class_.ClassNumTypeArguments() > 0) {
     ASSERT(!parsed_function_->function().IsFactory());
-    intptr_t type_arguments_field_offset =
-        active_class_.klass->type_arguments_field_offset();
-    ASSERT(type_arguments_field_offset != Class::kNoTypeArguments);
-
     instructions += LoadLocal(scopes_->this_variable);
-    instructions += LoadField(type_arguments_field_offset);
+    instructions += LoadNativeField(
+        NativeFieldDesc::GetTypeArgumentsFieldFor(Z, *active_class_.klass));
   } else {
     instructions += NullConstant();
   }
@@ -354,7 +153,7 @@ Fragment FlowGraphBuilder::LoadInstantiatorTypeArguments() {
 // arguments of the current function.
 Fragment FlowGraphBuilder::LoadFunctionTypeArguments() {
   Fragment instructions;
-  if (!Isolate::Current()->reify_generic_functions()) {
+  if (!FLAG_reify_generic_functions) {
     instructions += NullConstant();
     return instructions;
   }
@@ -369,27 +168,6 @@ Fragment FlowGraphBuilder::LoadFunctionTypeArguments() {
   }
 
   return instructions;
-}
-
-Fragment FlowGraphBuilder::InstantiateType(const AbstractType& type) {
-  Value* function_type_args = Pop();
-  Value* instantiator_type_args = Pop();
-  InstantiateTypeInstr* instr = new (Z) InstantiateTypeInstr(
-      TokenPosition::kNoSource, type, instantiator_type_args,
-      function_type_args, GetNextDeoptId());
-  Push(instr);
-  return Fragment(instr);
-}
-
-Fragment FlowGraphBuilder::InstantiateTypeArguments(
-    const TypeArguments& type_arguments) {
-  Value* function_type_args = Pop();
-  Value* instantiator_type_args = Pop();
-  InstantiateTypeArgumentsInstr* instr = new (Z) InstantiateTypeArgumentsInstr(
-      TokenPosition::kNoSource, type_arguments, *active_class_.klass,
-      instantiator_type_args, function_type_args, GetNextDeoptId());
-  Push(instr);
-  return Fragment(instr);
 }
 
 Fragment FlowGraphBuilder::TranslateInstantiatedTypeArguments(
@@ -435,13 +213,6 @@ Fragment FlowGraphBuilder::TranslateInstantiatedTypeArguments(
   return instructions;
 }
 
-Fragment FlowGraphBuilder::AllocateContext(intptr_t size) {
-  AllocateContextInstr* allocate =
-      new (Z) AllocateContextInstr(TokenPosition::kNoSource, size);
-  Push(allocate);
-  return Fragment(allocate);
-}
-
 Fragment FlowGraphBuilder::AllocateObject(TokenPosition position,
                                           const Class& klass,
                                           intptr_t argument_count) {
@@ -462,65 +233,6 @@ Fragment FlowGraphBuilder::AllocateObject(const Class& klass,
   return Fragment(allocate);
 }
 
-Fragment FlowGraphBuilder::BooleanNegate() {
-  BooleanNegateInstr* negate = new (Z) BooleanNegateInstr(Pop());
-  Push(negate);
-  return Fragment(negate);
-}
-
-Fragment BaseFlowGraphBuilder::StrictCompare(Token::Kind kind,
-                                             bool number_check /* = false */) {
-  Value* right = Pop();
-  Value* left = Pop();
-  StrictCompareInstr* compare =
-      new (Z) StrictCompareInstr(TokenPosition::kNoSource, kind, left, right,
-                                 number_check, GetNextDeoptId());
-  Push(compare);
-  return Fragment(compare);
-}
-
-Fragment BaseFlowGraphBuilder::BranchIfTrue(TargetEntryInstr** then_entry,
-                                            TargetEntryInstr** otherwise_entry,
-                                            bool negate) {
-  Fragment instructions = Constant(Bool::True());
-  return instructions + BranchIfEqual(then_entry, otherwise_entry, negate);
-}
-
-Fragment BaseFlowGraphBuilder::BranchIfNull(TargetEntryInstr** then_entry,
-                                            TargetEntryInstr** otherwise_entry,
-                                            bool negate) {
-  Fragment instructions = NullConstant();
-  return instructions + BranchIfEqual(then_entry, otherwise_entry, negate);
-}
-
-Fragment BaseFlowGraphBuilder::BranchIfEqual(TargetEntryInstr** then_entry,
-                                             TargetEntryInstr** otherwise_entry,
-                                             bool negate) {
-  Value* right_value = Pop();
-  Value* left_value = Pop();
-  StrictCompareInstr* compare = new (Z) StrictCompareInstr(
-      TokenPosition::kNoSource, negate ? Token::kNE_STRICT : Token::kEQ_STRICT,
-      left_value, right_value, false, GetNextDeoptId());
-  BranchInstr* branch = new (Z) BranchInstr(compare, GetNextDeoptId());
-  *then_entry = *branch->true_successor_address() = BuildTargetEntry();
-  *otherwise_entry = *branch->false_successor_address() = BuildTargetEntry();
-  return Fragment(branch).closed();
-}
-
-Fragment BaseFlowGraphBuilder::BranchIfStrictEqual(
-    TargetEntryInstr** then_entry,
-    TargetEntryInstr** otherwise_entry) {
-  Value* rhs = Pop();
-  Value* lhs = Pop();
-  StrictCompareInstr* compare =
-      new (Z) StrictCompareInstr(TokenPosition::kNoSource, Token::kEQ_STRICT,
-                                 lhs, rhs, false, GetNextDeoptId());
-  BranchInstr* branch = new (Z) BranchInstr(compare, GetNextDeoptId());
-  *then_entry = *branch->true_successor_address() = BuildTargetEntry();
-  *otherwise_entry = *branch->false_successor_address() = BuildTargetEntry();
-  return Fragment(branch).closed();
-}
-
 Fragment FlowGraphBuilder::CatchBlockEntry(const Array& handler_types,
                                            intptr_t handler_index,
                                            bool needs_stacktrace,
@@ -534,8 +246,8 @@ Fragment FlowGraphBuilder::CatchBlockEntry(const Array& handler_types,
       TokenPosition::kNoSource,  // Token position of catch block.
       is_synthesized,  // whether catch block was synthesized by FE compiler
       AllocateBlockId(), CurrentTryIndex(), graph_entry_, handler_types,
-      handler_index, *exception_var, *stacktrace_var, needs_stacktrace,
-      GetNextDeoptId(), raw_exception_var, raw_stacktrace_var);
+      handler_index, needs_stacktrace, GetNextDeoptId(), exception_var,
+      stacktrace_var, raw_exception_var, raw_stacktrace_var);
   graph_entry_->AddCatchEntry(entry);
 
   Fragment instructions(entry);
@@ -618,11 +330,6 @@ Fragment FlowGraphBuilder::CheckStackOverflowInPrologue(
   return CheckStackOverflow(position);
 }
 
-Fragment FlowGraphBuilder::CheckStackOverflow(TokenPosition position) {
-  return Fragment(
-      new (Z) CheckStackOverflowInstr(position, loop_depth_, GetNextDeoptId()));
-}
-
 Fragment FlowGraphBuilder::CloneContext(intptr_t num_context_variables) {
   LocalVariable* context_variable = parsed_function_->current_context_var();
 
@@ -638,32 +345,6 @@ Fragment FlowGraphBuilder::CloneContext(intptr_t num_context_variables) {
   return instructions;
 }
 
-Fragment BaseFlowGraphBuilder::Constant(const Object& value) {
-  ASSERT(value.IsNotTemporaryScopedHandle());
-  ConstantInstr* constant = new (Z) ConstantInstr(value);
-  Push(constant);
-  return Fragment(constant);
-}
-
-Fragment FlowGraphBuilder::CreateArray() {
-  Value* element_count = Pop();
-  CreateArrayInstr* array =
-      new (Z) CreateArrayInstr(TokenPosition::kNoSource,
-                               Pop(),  // Element type.
-                               element_count, GetNextDeoptId());
-  Push(array);
-  return Fragment(array);
-}
-
-Fragment BaseFlowGraphBuilder::Goto(JoinEntryInstr* destination) {
-  return Fragment(new (Z) GotoInstr(destination, GetNextDeoptId())).closed();
-}
-
-Fragment BaseFlowGraphBuilder::IntConstant(int64_t value) {
-  return Fragment(
-      Constant(Integer::ZoneHandle(Z, Integer::New(value, Heap::kOld))));
-}
-
 Fragment FlowGraphBuilder::InstanceCall(
     TokenPosition position,
     const String& name,
@@ -673,120 +354,44 @@ Fragment FlowGraphBuilder::InstanceCall(
     const Array& argument_names,
     intptr_t checked_argument_count,
     const Function& interface_target,
-    const InferredTypeMetadata* result_type) {
+    const InferredTypeMetadata* result_type,
+    bool use_unchecked_entry,
+    const CallSiteAttributesMetadata* call_site_attrs) {
   const intptr_t total_count = argument_count + (type_args_len > 0 ? 1 : 0);
   ArgumentArray arguments = GetArguments(total_count);
-  InstanceCallInstr* call = new (Z) InstanceCallInstr(
-      position, name, kind, arguments, type_args_len, argument_names,
-      checked_argument_count, ic_data_array_, GetNextDeoptId(),
-      interface_target);
+  InstanceCallInstr* call = new (Z)
+      InstanceCallInstr(position, name, kind, arguments, type_args_len,
+                        argument_names, checked_argument_count, ic_data_array_,
+                        GetNextDeoptId(), interface_target);
   if ((result_type != NULL) && !result_type->IsTrivial()) {
-    call->SetResultType(Z, CompileType::CreateNullable(result_type->nullable,
-                                                       result_type->cid));
+    call->SetResultType(Z, result_type->ToCompileType(Z));
+  }
+  if (use_unchecked_entry) {
+    call->set_entry_kind(Code::EntryKind::kUnchecked);
+  }
+  if (call_site_attrs != nullptr && call_site_attrs->receiver_type != nullptr &&
+      call_site_attrs->receiver_type->IsInstantiated()) {
+    call->set_static_receiver_type(call_site_attrs->receiver_type);
   }
   Push(call);
   return Fragment(call);
 }
 
-Fragment FlowGraphBuilder::ClosureCall(intptr_t type_args_len,
+Fragment FlowGraphBuilder::ClosureCall(TokenPosition position,
+                                       intptr_t type_args_len,
                                        intptr_t argument_count,
-                                       const Array& argument_names) {
+                                       const Array& argument_names,
+                                       bool is_statically_checked) {
   Value* function = Pop();
   const intptr_t total_count = argument_count + (type_args_len > 0 ? 1 : 0);
   ArgumentArray arguments = GetArguments(total_count);
   ClosureCallInstr* call = new (Z)
       ClosureCallInstr(function, arguments, type_args_len, argument_names,
-                       TokenPosition::kNoSource, GetNextDeoptId());
+                       position, GetNextDeoptId(),
+                       is_statically_checked ? Code::EntryKind::kUnchecked
+                                             : Code::EntryKind::kNormal);
   Push(call);
   return Fragment(call);
-}
-
-Fragment BaseFlowGraphBuilder::ThrowException(TokenPosition position) {
-  Fragment instructions;
-  instructions += Drop();
-  instructions +=
-      Fragment(new (Z) ThrowInstr(position, GetNextDeoptId())).closed();
-  // Use it's side effect of leaving a constant on the stack (does not change
-  // the graph).
-  NullConstant();
-
-  pending_argument_count_ -= 1;
-
-  return instructions;
-}
-
-Fragment BaseFlowGraphBuilder::TailCall(const Code& code) {
-  Fragment instructions;
-  Value* arg_desc = Pop();
-  return Fragment(new (Z) TailCallInstr(code, arg_desc));
-}
-
-Fragment BaseFlowGraphBuilder::TestTypeArgsLen(Fragment eq_branch,
-                                               Fragment neq_branch,
-                                               intptr_t num_type_args) {
-  Fragment test;
-
-  TargetEntryInstr* eq_entry;
-  TargetEntryInstr* neq_entry;
-
-  test += LoadArgDescriptor();
-  test += LoadNativeField(NativeFieldDesc::ArgumentsDescriptor_type_args_len());
-  test += IntConstant(num_type_args);
-  test += BranchIfEqual(&eq_entry, &neq_entry);
-
-  eq_branch.Prepend(eq_entry);
-  neq_branch.Prepend(neq_entry);
-
-  JoinEntryInstr* join = BuildJoinEntry();
-  eq_branch += Goto(join);
-  neq_branch += Goto(join);
-
-  return Fragment(test.entry, join);
-}
-
-Fragment BaseFlowGraphBuilder::TestDelayedTypeArgs(LocalVariable* closure,
-                                                   Fragment present,
-                                                   Fragment absent) {
-  Fragment test;
-
-  TargetEntryInstr* absent_entry;
-  TargetEntryInstr* present_entry;
-
-  test += LoadLocal(closure);
-  test += LoadField(Closure::delayed_type_arguments_offset());
-  test += Constant(Object::empty_type_arguments());
-  test += BranchIfEqual(&absent_entry, &present_entry);
-
-  present.Prepend(present_entry);
-  absent.Prepend(absent_entry);
-
-  JoinEntryInstr* join = BuildJoinEntry();
-  absent += Goto(join);
-  present += Goto(join);
-
-  return Fragment(test.entry, join);
-}
-
-Fragment BaseFlowGraphBuilder::TestAnyTypeArgs(Fragment present,
-                                               Fragment absent) {
-  if (parsed_function_->function().IsClosureFunction()) {
-    LocalVariable* closure =
-        parsed_function_->node_sequence()->scope()->VariableAt(0);
-
-    JoinEntryInstr* complete = BuildJoinEntry();
-    JoinEntryInstr* present_entry = BuildJoinEntry();
-
-    Fragment test = TestTypeArgsLen(
-        TestDelayedTypeArgs(closure, Goto(present_entry), absent),
-        Goto(present_entry), 0);
-    test += Goto(complete);
-
-    Fragment(present_entry) + present + Goto(complete);
-
-    return Fragment(test.entry, complete);
-  } else {
-    return TestTypeArgsLen(absent, present, 0);
-  }
 }
 
 Fragment FlowGraphBuilder::RethrowException(TokenPosition position,
@@ -812,63 +417,6 @@ Fragment FlowGraphBuilder::LoadClassId() {
   return Fragment(load);
 }
 
-const Field& MayCloneField(Zone* zone, const Field& field) {
-  if ((Compiler::IsBackgroundCompilation() ||
-       FLAG_force_clone_compiler_objects) &&
-      field.IsOriginal()) {
-    return Field::ZoneHandle(zone, field.CloneFromOriginal());
-  } else {
-    ASSERT(field.IsZoneHandle());
-    return field;
-  }
-}
-
-Fragment FlowGraphBuilder::LoadField(const Field& field) {
-  LoadFieldInstr* load =
-      new (Z) LoadFieldInstr(Pop(), &MayCloneField(Z, field),
-                             AbstractType::ZoneHandle(Z, field.type()),
-                             TokenPosition::kNoSource, parsed_function_);
-  Push(load);
-  return Fragment(load);
-}
-
-Fragment FlowGraphBuilder::LoadField(intptr_t offset, intptr_t class_id) {
-  return BaseFlowGraphBuilder::LoadField(offset, class_id);
-}
-
-Fragment BaseFlowGraphBuilder::LoadField(intptr_t offset, intptr_t class_id) {
-  LoadFieldInstr* load = new (Z) LoadFieldInstr(
-      Pop(), offset, AbstractType::ZoneHandle(Z), TokenPosition::kNoSource);
-  load->set_result_cid(class_id);
-  Push(load);
-  return Fragment(load);
-}
-
-Fragment BaseFlowGraphBuilder::LoadIndexed(intptr_t index_scale) {
-  Value* index = Pop();
-  Value* array = Pop();
-  LoadIndexedInstr* instr = new (Z)
-      LoadIndexedInstr(array, index, index_scale, kArrayCid, kAlignedAccess,
-                       Thread::kNoDeoptId, TokenPosition::kNoSource);
-  Push(instr);
-  return Fragment(instr);
-}
-
-Fragment BaseFlowGraphBuilder::LoadNativeField(
-    const NativeFieldDesc* native_field) {
-  LoadFieldInstr* load =
-      new (Z) LoadFieldInstr(Pop(), native_field, TokenPosition::kNoSource);
-  Push(load);
-  return Fragment(load);
-}
-
-Fragment BaseFlowGraphBuilder::LoadLocal(LocalVariable* variable) {
-  LoadLocalInstr* load =
-      new (Z) LoadLocalInstr(*variable, TokenPosition::kNoSource);
-  Push(load);
-  return Fragment(load);
-}
-
 Fragment FlowGraphBuilder::LoadLocal(LocalVariable* variable) {
   if (variable->is_captured()) {
     Fragment instructions;
@@ -883,19 +431,8 @@ Fragment FlowGraphBuilder::LoadLocal(LocalVariable* variable) {
 
 Fragment FlowGraphBuilder::InitStaticField(const Field& field) {
   InitStaticFieldInstr* init = new (Z)
-      InitStaticFieldInstr(Pop(), MayCloneField(Z, field), GetNextDeoptId());
+      InitStaticFieldInstr(Pop(), MayCloneField(field), GetNextDeoptId());
   return Fragment(init);
-}
-
-Fragment FlowGraphBuilder::LoadStaticField() {
-  LoadStaticFieldInstr* load =
-      new (Z) LoadStaticFieldInstr(Pop(), TokenPosition::kNoSource);
-  Push(load);
-  return Fragment(load);
-}
-
-Fragment BaseFlowGraphBuilder::NullConstant() {
-  return Constant(Instance::ZoneHandle(Z, Instance::null()));
 }
 
 Fragment FlowGraphBuilder::NativeCall(const String* name,
@@ -903,9 +440,7 @@ Fragment FlowGraphBuilder::NativeCall(const String* name,
   InlineBailout("kernel::FlowGraphBuilder::NativeCall");
   const intptr_t num_args =
       function->NumParameters() +
-      ((function->IsGeneric() && Isolate::Current()->reify_generic_functions())
-           ? 1
-           : 0);
+      ((function->IsGeneric() && FLAG_reify_generic_functions) ? 1 : 0);
   ArgumentArray arguments = GetArguments(num_args);
   NativeCallInstr* call =
       new (Z) NativeCallInstr(name, function, FLAG_link_natives_lazily,
@@ -914,30 +449,19 @@ Fragment FlowGraphBuilder::NativeCall(const String* name,
   return Fragment(call);
 }
 
-Fragment BaseFlowGraphBuilder::PushArgument() {
-  PushArgumentInstr* argument = new (Z) PushArgumentInstr(Pop());
-  Push(argument);
-
-  argument->set_temp_index(argument->temp_index() - 1);
-  ++pending_argument_count_;
-
-  return Fragment(argument);
-}
-
-Fragment FlowGraphBuilder::Return(TokenPosition position) {
+Fragment FlowGraphBuilder::Return(TokenPosition position,
+                                  bool omit_result_type_check /* = false */) {
   Fragment instructions;
   const Function& function = parsed_function_->function();
 
   // Emit a type check of the return type in checked mode for all functions
   // and in strong mode for native functions.
-  if (I->type_checks() || (function.is_native() && I->strong())) {
+  if (!omit_result_type_check &&
+      (I->type_checks() || (function.is_native() && FLAG_strong))) {
     const AbstractType& return_type =
         AbstractType::Handle(Z, function.result_type());
     instructions += CheckAssignable(return_type, Symbols::FunctionResult());
   }
-
-  Value* value = Pop();
-  ASSERT(stack_ == NULL);
 
   if (NeedsDebugStepCheck(function, position)) {
     instructions += DebugStepCheck(position);
@@ -955,18 +479,15 @@ Fragment FlowGraphBuilder::Return(TokenPosition position) {
     instructions += Drop();
   }
 
-  ReturnInstr* return_instr =
-      new (Z) ReturnInstr(position, value, GetNextDeoptId());
-  if (exit_collector_ != NULL) exit_collector_->AddExit(return_instr);
+  instructions += BaseFlowGraphBuilder::Return(position);
 
-  instructions <<= return_instr;
-
-  return instructions.closed();
+  return instructions;
 }
 
 Fragment FlowGraphBuilder::CheckNull(TokenPosition position,
                                      LocalVariable* receiver,
-                                     const String& function_name) {
+                                     const String& function_name,
+                                     bool clear_the_temp /* = true */) {
   Fragment instructions = LoadLocal(receiver);
 
   CheckNullInstr* check_null =
@@ -974,11 +495,13 @@ Fragment FlowGraphBuilder::CheckNull(TokenPosition position,
 
   instructions <<= check_null;
 
-  // Null out receiver to make sure it is not saved into the frame before
-  // doing the call.
-  instructions += NullConstant();
-  instructions += StoreLocal(TokenPosition::kNoSource, receiver);
-  instructions += Drop();
+  if (clear_the_temp) {
+    // Null out receiver to make sure it is not saved into the frame before
+    // doing the call.
+    instructions += NullConstant();
+    instructions += StoreLocal(TokenPosition::kNoSource, receiver);
+    instructions += Drop();
+  }
 
   return instructions;
 }
@@ -1036,8 +559,7 @@ void FlowGraphBuilder::SetResultTypeForStaticCall(
     }
   }
   if ((result_type != NULL) && !result_type->IsTrivial()) {
-    call->SetResultType(Z, CompileType::CreateNullable(result_type->nullable,
-                                                       result_type->cid));
+    call->SetResultType(Z, result_type->ToCompileType(Z));
   }
 }
 
@@ -1058,23 +580,9 @@ Fragment FlowGraphBuilder::StaticCall(TokenPosition position,
   return Fragment(call);
 }
 
-Fragment FlowGraphBuilder::StoreIndexed(intptr_t class_id) {
-  Value* value = Pop();
-  Value* index = Pop();
-  const StoreBarrierType emit_store_barrier =
-      value->BindsToConstant() ? kNoStoreBarrier : kEmitStoreBarrier;
-  StoreIndexedInstr* store = new (Z) StoreIndexedInstr(
-      Pop(),  // Array.
-      index, value, emit_store_barrier, Instance::ElementSizeFor(class_id),
-      class_id, kAlignedAccess, Thread::kNoDeoptId, TokenPosition::kNoSource);
-  Push(store);
-  return Fragment(store);
-}
-
-Fragment FlowGraphBuilder::StoreInstanceField(
+Fragment FlowGraphBuilder::StoreInstanceFieldGuarded(
     const Field& field,
-    bool is_initialization_store,
-    StoreBarrierType emit_store_barrier) {
+    bool is_initialization_store) {
   Fragment instructions;
 
   const AbstractType& dst_type = AbstractType::ZoneHandle(Z, field.type());
@@ -1083,84 +591,10 @@ Fragment FlowGraphBuilder::StoreInstanceField(
         CheckAssignable(dst_type, String::ZoneHandle(Z, field.name()));
   }
 
-  Value* value = Pop();
-  if (value->BindsToConstant()) {
-    emit_store_barrier = kNoStoreBarrier;
-  }
-
-  StoreInstanceFieldInstr* store = new (Z)
-      StoreInstanceFieldInstr(MayCloneField(Z, field), Pop(), value,
-                              emit_store_barrier, TokenPosition::kNoSource);
-  store->set_is_initialization(is_initialization_store);
-  instructions <<= store;
+  instructions += BaseFlowGraphBuilder::StoreInstanceFieldGuarded(
+      field, is_initialization_store);
 
   return instructions;
-}
-
-Fragment FlowGraphBuilder::StoreInstanceFieldGuarded(
-    const Field& field,
-    bool is_initialization_store) {
-  Fragment instructions;
-  const Field& field_clone = MayCloneField(Z, field);
-  if (I->use_field_guards()) {
-    LocalVariable* store_expression = MakeTemporary();
-    instructions += LoadLocal(store_expression);
-    instructions += GuardFieldClass(field_clone, GetNextDeoptId());
-    instructions += LoadLocal(store_expression);
-    instructions += GuardFieldLength(field_clone, GetNextDeoptId());
-  }
-  instructions += StoreInstanceField(field_clone, is_initialization_store);
-  return instructions;
-}
-
-Fragment FlowGraphBuilder::StoreInstanceField(
-    TokenPosition position,
-    intptr_t offset,
-    StoreBarrierType emit_store_barrier) {
-  return BaseFlowGraphBuilder::StoreInstanceField(position, offset,
-                                                  emit_store_barrier);
-}
-
-Fragment BaseFlowGraphBuilder::StoreInstanceField(
-    TokenPosition position,
-    intptr_t offset,
-    StoreBarrierType emit_store_barrier) {
-  Value* value = Pop();
-  if (value->BindsToConstant()) {
-    emit_store_barrier = kNoStoreBarrier;
-  }
-  StoreInstanceFieldInstr* store = new (Z) StoreInstanceFieldInstr(
-      offset, Pop(), value, emit_store_barrier, position);
-  return Fragment(store);
-}
-
-Fragment BaseFlowGraphBuilder::StoreLocal(TokenPosition position,
-                                          LocalVariable* variable) {
-  if (variable->is_captured()) {
-    Fragment instructions;
-    LocalVariable* value = MakeTemporary();
-    instructions += LoadContextAt(variable->owner()->context_level());
-    instructions += LoadLocal(value);
-    instructions += StoreInstanceField(
-        position, Context::variable_offset(variable->index().value()));
-    return instructions;
-  }
-  return StoreLocalRaw(position, variable);
-}
-
-Fragment BaseFlowGraphBuilder::StoreLocalRaw(TokenPosition position,
-                                             LocalVariable* variable) {
-  Value* value = Pop();
-  StoreLocalInstr* store = new (Z) StoreLocalInstr(*variable, value, position);
-  Fragment instructions(store);
-  Push(store);
-  return instructions;
-}
-
-Fragment FlowGraphBuilder::StoreStaticField(TokenPosition position,
-                                            const Field& field) {
-  return Fragment(
-      new (Z) StoreStaticFieldInstr(MayCloneField(Z, field), Pop(), position));
 }
 
 Fragment FlowGraphBuilder::StringInterpolate(TokenPosition position) {
@@ -1277,128 +711,10 @@ Fragment FlowGraphBuilder::ThrowNoSuchMethodError() {
   return instructions;
 }
 
-LocalVariable* BaseFlowGraphBuilder::MakeTemporary() {
-  char name[64];
-  intptr_t index = stack_->definition()->temp_index();
-  Utils::SNPrint(name, 64, ":temp%" Pd, index);
-  const String& symbol_name =
-      String::ZoneHandle(Z, Symbols::New(thread_, name));
-  LocalVariable* variable =
-      new (Z) LocalVariable(TokenPosition::kNoSource, TokenPosition::kNoSource,
-                            symbol_name, Object::dynamic_type());
-  // Set the index relative to the base of the expression stack including
-  // outgoing arguments.
-  variable->set_index(VariableIndex(-parsed_function_->num_stack_locals() -
-                                    pending_argument_count_ - index));
-
-  // The value has uses as if it were a local variable.  Mark the definition
-  // as used so that its temp index will not be cleared (causing it to never
-  // be materialized in the expression stack).
-  stack_->definition()->set_ssa_temp_index(0);
-
-  return variable;
-}
-
-intptr_t BaseFlowGraphBuilder::CurrentTryIndex() {
-  if (try_catch_block_ == NULL) {
-    return CatchClauseNode::kInvalidTryIndex;
-  } else {
-    return try_catch_block_->try_index();
-  }
-}
-
 LocalVariable* FlowGraphBuilder::LookupVariable(intptr_t kernel_offset) {
   LocalVariable* local = scopes_->locals.Lookup(kernel_offset);
   ASSERT(local != NULL);
   return local;
-}
-
-void BaseFlowGraphBuilder::SetTempIndex(Definition* definition) {
-  definition->set_temp_index(
-      stack_ == NULL ? 0 : stack_->definition()->temp_index() + 1);
-}
-
-void BaseFlowGraphBuilder::Push(Definition* definition) {
-  SetTempIndex(definition);
-  Value::AddToList(new (Z) Value(definition), &stack_);
-}
-
-Value* BaseFlowGraphBuilder::Pop() {
-  ASSERT(stack_ != NULL);
-  Value* value = stack_;
-  stack_ = value->next_use();
-  if (stack_ != NULL) stack_->set_previous_use(NULL);
-
-  value->set_next_use(NULL);
-  value->set_previous_use(NULL);
-  value->definition()->ClearSSATempIndex();
-  return value;
-}
-
-Fragment BaseFlowGraphBuilder::Drop() {
-  ASSERT(stack_ != NULL);
-  Fragment instructions;
-  Definition* definition = stack_->definition();
-  // The SSA renaming implementation doesn't like [LoadLocal]s without a
-  // tempindex.
-  if (definition->HasSSATemp() || definition->IsLoadLocal()) {
-    instructions <<= new (Z) DropTempsInstr(1, NULL);
-  } else {
-    definition->ClearTempIndex();
-  }
-
-  Pop();
-  return instructions;
-}
-
-Fragment BaseFlowGraphBuilder::DropTempsPreserveTop(
-    intptr_t num_temps_to_drop) {
-  Value* top = Pop();
-
-  for (intptr_t i = 0; i < num_temps_to_drop; ++i) {
-    Pop();
-  }
-
-  DropTempsInstr* drop_temps = new (Z) DropTempsInstr(num_temps_to_drop, top);
-  Push(drop_temps);
-
-  return Fragment(drop_temps);
-}
-
-Fragment BaseFlowGraphBuilder::MakeTemp() {
-  MakeTempInstr* make_temp = new (Z) MakeTempInstr(Z);
-  Push(make_temp);
-  return Fragment(make_temp);
-}
-
-void FlowGraphBuilder::InlineBailout(const char* reason) {
-  bool is_inlining = exit_collector_ != NULL;
-  if (is_inlining) {
-    parsed_function_->function().set_is_inlinable(false);
-    parsed_function_->Bailout("kernel::FlowGraphBuilder", reason);
-  }
-}
-
-bool FlowGraphBuilder::NeedsDynamicInvocationForwarder(
-    const Function& function) {
-  ASSERT(Isolate::Current()->strong());
-
-  Thread* thread = Thread::Current();
-  Zone* zone_ = thread->zone();
-
-  TranslationHelper helper(thread);
-  Script& script = Script::Handle(Z, function.script());
-  helper.InitFromScript(script);
-
-  const Class& owner_class = Class::Handle(Z, function.Owner());
-  ActiveClass active_class;
-  ActiveClassScope active_class_scope(&active_class, &owner_class);
-
-  StreamingFlowGraphBuilder streaming_flow_graph_builder(
-      &helper, script, Z, ExternalTypedData::Handle(Z, function.KernelData()),
-      function.KernelDataProgramOffset(), &active_class);
-
-  return streaming_flow_graph_builder.NeedsDynamicInvocationForwarder(function);
 }
 
 FlowGraph* FlowGraphBuilder::BuildGraph() {
@@ -1419,25 +735,23 @@ FlowGraph* FlowGraphBuilder::BuildGraph() {
   StreamingFlowGraphBuilder streaming_flow_graph_builder(
       this, ExternalTypedData::Handle(Z, function.KernelData()),
       function.KernelDataProgramOffset());
-  streaming_flow_graph_builder_ = &streaming_flow_graph_builder;
-  FlowGraph* result = streaming_flow_graph_builder_->BuildGraph();
-  streaming_flow_graph_builder_ = NULL;
-  return result;
+  return streaming_flow_graph_builder.BuildGraph();
 }
 
-Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
-                                              const Function& function) {
+Fragment FlowGraphBuilder::NativeFunctionBody(const Function& function,
+                                              LocalVariable* first_parameter) {
   ASSERT(function.is_native());
   // We explicitly build the graph for native functions in the same way that the
   // from-source backend does.  We should find a way to have a single component
   // to build these graphs so that this code is not duplicated.
 
   Fragment body;
-  MethodRecognizer::Kind kind = MethodRecognizer::RecognizeKind(function);
+  const MethodRecognizer::Kind kind = MethodRecognizer::RecognizeKind(function);
+  bool omit_result_type_check = true;
   switch (kind) {
     case MethodRecognizer::kObjectEquals:
       body += LoadLocal(scopes_->this_variable);
-      body += LoadLocal(LookupVariable(first_positional_offset));
+      body += LoadLocal(first_parameter);
       body += StrictCompare(Token::kEQ_STRICT);
       break;
     case MethodRecognizer::kStringBaseLength:
@@ -1463,7 +777,7 @@ Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
       body += LoadNativeField(NativeFieldDesc::TypedData_length());
       break;
     case MethodRecognizer::kClassIDgetID:
-      body += LoadLocal(LookupVariable(first_positional_offset));
+      body += LoadLocal(first_parameter);
       body += LoadClassId();
       break;
     case MethodRecognizer::kGrowableArrayCapacity:
@@ -1500,7 +814,7 @@ Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
         Fragment allocate(allocate_non_growable);
         allocate += LoadLocal(scopes_->type_arguments_variable);
         allocate += PushArgument();
-        allocate += LoadLocal(LookupVariable(first_positional_offset));
+        allocate += LoadLocal(first_parameter);
         allocate += PushArgument();
         allocate +=
             StaticCall(TokenPosition::kNoSource, func, 2, ICData::kStatic);
@@ -1538,7 +852,7 @@ Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
     }
     case MethodRecognizer::kObjectArrayAllocate:
       body += LoadLocal(scopes_->type_arguments_variable);
-      body += LoadLocal(LookupVariable(first_positional_offset));
+      body += LoadLocal(first_parameter);
       body += CreateArray();
       break;
     case MethodRecognizer::kLinkedHashMap_getIndex:
@@ -1547,7 +861,7 @@ Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
       break;
     case MethodRecognizer::kLinkedHashMap_setIndex:
       body += LoadLocal(scopes_->this_variable);
-      body += LoadLocal(LookupVariable(first_positional_offset));
+      body += LoadLocal(first_parameter);
       body += StoreInstanceField(TokenPosition::kNoSource,
                                  LinkedHashMap::index_offset());
       body += NullConstant();
@@ -1558,7 +872,7 @@ Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
       break;
     case MethodRecognizer::kLinkedHashMap_setData:
       body += LoadLocal(scopes_->this_variable);
-      body += LoadLocal(LookupVariable(first_positional_offset));
+      body += LoadLocal(first_parameter);
       body += StoreInstanceField(TokenPosition::kNoSource,
                                  LinkedHashMap::data_offset());
       body += NullConstant();
@@ -1569,7 +883,7 @@ Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
       break;
     case MethodRecognizer::kLinkedHashMap_setHashMask:
       body += LoadLocal(scopes_->this_variable);
-      body += LoadLocal(LookupVariable(first_positional_offset));
+      body += LoadLocal(first_parameter);
       body += StoreInstanceField(TokenPosition::kNoSource,
                                  LinkedHashMap::hash_mask_offset(),
                                  kNoStoreBarrier);
@@ -1581,7 +895,7 @@ Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
       break;
     case MethodRecognizer::kLinkedHashMap_setUsedData:
       body += LoadLocal(scopes_->this_variable);
-      body += LoadLocal(LookupVariable(first_positional_offset));
+      body += LoadLocal(first_parameter);
       body += StoreInstanceField(TokenPosition::kNoSource,
                                  LinkedHashMap::used_data_offset(),
                                  kNoStoreBarrier);
@@ -1593,7 +907,7 @@ Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
       break;
     case MethodRecognizer::kLinkedHashMap_setDeletedKeys:
       body += LoadLocal(scopes_->this_variable);
-      body += LoadLocal(LookupVariable(first_positional_offset));
+      body += LoadLocal(first_parameter);
       body += StoreInstanceField(TokenPosition::kNoSource,
                                  LinkedHashMap::deleted_keys_offset(),
                                  kNoStoreBarrier);
@@ -1601,8 +915,7 @@ Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
       break;
     default: {
       String& name = String::ZoneHandle(Z, function.native_name());
-      if (function.IsGeneric() &&
-          Isolate::Current()->reify_generic_functions()) {
+      if (function.IsGeneric() && FLAG_reify_generic_functions) {
         body += LoadLocal(parsed_function_->RawTypeArgumentsVariable());
         body += PushArgument();
       }
@@ -1611,10 +924,12 @@ Fragment FlowGraphBuilder::NativeFunctionBody(intptr_t first_positional_offset,
         body += PushArgument();
       }
       body += NativeCall(&name, &function);
+      // We typecheck results of native calls for type safety.
+      omit_result_type_check = false;
       break;
     }
   }
-  return body + Return(TokenPosition::kNoSource);
+  return body + Return(TokenPosition::kNoSource, omit_result_type_check);
 }
 
 Fragment FlowGraphBuilder::BuildImplicitClosureCreation(
@@ -1668,16 +983,6 @@ Fragment FlowGraphBuilder::BuildImplicitClosureCreation(
   return fragment;
 }
 
-Fragment FlowGraphBuilder::GuardFieldLength(const Field& field,
-                                            intptr_t deopt_id) {
-  return Fragment(new (Z) GuardFieldLengthInstr(Pop(), field, deopt_id));
-}
-
-Fragment FlowGraphBuilder::GuardFieldClass(const Field& field,
-                                           intptr_t deopt_id) {
-  return Fragment(new (Z) GuardFieldClassInstr(Pop(), field, deopt_id));
-}
-
 Fragment FlowGraphBuilder::CheckVariableTypeInCheckedMode(
     const AbstractType& dst_type,
     const String& name_symbol) {
@@ -1727,7 +1032,7 @@ Fragment FlowGraphBuilder::EvaluateAssertion() {
 
 Fragment FlowGraphBuilder::CheckBoolean(TokenPosition position) {
   Fragment instructions;
-  if (I->strong() || I->type_checks() || I->asserts()) {
+  if (FLAG_strong || I->type_checks() || I->asserts()) {
     LocalVariable* top_of_stack = MakeTemporary();
     instructions += LoadLocal(top_of_stack);
     instructions += AssertBool(position);
@@ -1743,6 +1048,9 @@ Fragment FlowGraphBuilder::CheckAssignable(const AbstractType& dst_type,
   if (dst_type.IsMalformed()) {
     return ThrowTypeError();
   }
+  if (!I->should_emit_strong_mode_checks()) {
+    return Fragment();
+  }
   if (!dst_type.IsDynamicType() && !dst_type.IsObjectType() &&
       !dst_type.IsVoidType()) {
     LocalVariable* top_of_stack = MakeTemporary();
@@ -1754,18 +1062,14 @@ Fragment FlowGraphBuilder::CheckAssignable(const AbstractType& dst_type,
   return instructions;
 }
 
-Fragment FlowGraphBuilder::AssertBool(TokenPosition position) {
-  Value* value = Pop();
-  AssertBooleanInstr* instr =
-      new (Z) AssertBooleanInstr(position, value, GetNextDeoptId());
-  Push(instr);
-  return Fragment(instr);
-}
-
 Fragment FlowGraphBuilder::AssertAssignable(TokenPosition position,
                                             const AbstractType& dst_type,
                                             const String& dst_name,
                                             AssertAssignableInstr::Kind kind) {
+  if (!I->should_emit_strong_mode_checks()) {
+    return Fragment();
+  }
+
   Fragment instructions;
   Value* value = Pop();
 
@@ -2050,8 +1354,8 @@ FlowGraph* FlowGraphBuilder::BuildGraphOfInvokeFieldDispatcher(
     body += LoadLocal(closure);
     body += LoadField(Closure::function_offset());
 
-    body += ClosureCall(descriptor.TypeArgsLen(), descriptor.Count(),
-                        argument_names);
+    body += ClosureCall(TokenPosition::kNoSource, descriptor.TypeArgsLen(),
+                        descriptor.Count(), argument_names);
   } else {
     const intptr_t kNumArgsChecked = 1;
     body += InstanceCall(TokenPosition::kMinSource, Symbols::Call(),
@@ -2066,312 +1370,11 @@ FlowGraph* FlowGraphBuilder::BuildGraphOfInvokeFieldDispatcher(
                            prologue_info);
 }
 
-TargetEntryInstr* BaseFlowGraphBuilder::BuildTargetEntry() {
-  return new (Z)
-      TargetEntryInstr(AllocateBlockId(), CurrentTryIndex(), GetNextDeoptId());
-}
-
-JoinEntryInstr* BaseFlowGraphBuilder::BuildJoinEntry(intptr_t try_index) {
-  return new (Z) JoinEntryInstr(AllocateBlockId(), try_index, GetNextDeoptId());
-}
-
-JoinEntryInstr* BaseFlowGraphBuilder::BuildJoinEntry() {
-  return new (Z)
-      JoinEntryInstr(AllocateBlockId(), CurrentTryIndex(), GetNextDeoptId());
-}
-
-ArgumentArray BaseFlowGraphBuilder::GetArguments(int count) {
-  ArgumentArray arguments =
-      new (Z) ZoneGrowableArray<PushArgumentInstr*>(Z, count);
-  arguments->SetLength(count);
-  for (intptr_t i = count - 1; i >= 0; --i) {
-    ASSERT(stack_->definition()->IsPushArgument());
-    ASSERT(!stack_->definition()->HasSSATemp());
-    arguments->data()[i] = stack_->definition()->AsPushArgument();
-    Drop();
-  }
-  pending_argument_count_ -= count;
-  ASSERT(pending_argument_count_ >= 0);
-  return arguments;
-}
-
-Fragment BaseFlowGraphBuilder::SmiRelationalOp(Token::Kind kind) {
-  Value* right = Pop();
-  Value* left = Pop();
-  RelationalOpInstr* instr = new (Z) RelationalOpInstr(
-      TokenPosition::kNoSource, kind, left, right, kSmiCid, GetNextDeoptId());
-  Push(instr);
-  return Fragment(instr);
-}
-
-Fragment BaseFlowGraphBuilder::SmiBinaryOp(Token::Kind kind,
-                                           bool is_truncating) {
-  Value* right = Pop();
-  Value* left = Pop();
-  BinarySmiOpInstr* instr =
-      new (Z) BinarySmiOpInstr(kind, left, right, GetNextDeoptId());
-  if (is_truncating) {
-    instr->mark_truncating();
-  }
-  Push(instr);
-  return Fragment(instr);
-}
-
-Fragment BaseFlowGraphBuilder::LoadFpRelativeSlot(intptr_t offset) {
-  LoadIndexedUnsafeInstr* instr = new (Z) LoadIndexedUnsafeInstr(Pop(), offset);
-  Push(instr);
-  return Fragment(instr);
-}
-
-Fragment BaseFlowGraphBuilder::StoreFpRelativeSlot(intptr_t offset) {
-  Value* value = Pop();
-  Value* index = Pop();
-  StoreIndexedUnsafeInstr* instr =
-      new (Z) StoreIndexedUnsafeInstr(index, value, offset);
-  Push(instr);
-  return Fragment(instr);
-}
-
-JoinEntryInstr* BaseFlowGraphBuilder::BuildThrowNoSuchMethod() {
-  JoinEntryInstr* nsm = BuildJoinEntry();
-
-  Fragment failing(nsm);
-  const Code& nsm_handler =
-      Code::ZoneHandle(StubCode::CallClosureNoSuchMethod_entry()->code());
-  failing += LoadArgDescriptor();
-  failing += TailCall(nsm_handler);
-
-  return nsm;
-}
-
-RawObject* EvaluateMetadata(const Field& metadata_field) {
-  LongJumpScope jump;
-  if (setjmp(*jump.Set()) == 0) {
-    Thread* thread = Thread::Current();
-    Zone* zone_ = thread->zone();
-    TranslationHelper helper(thread);
-    Script& script = Script::Handle(Z, metadata_field.Script());
-    helper.InitFromScript(script);
-
-    const Class& owner_class = Class::Handle(Z, metadata_field.Owner());
-    ActiveClass active_class;
-    ActiveClassScope active_class_scope(&active_class, &owner_class);
-
-    StreamingFlowGraphBuilder streaming_flow_graph_builder(
-        &helper, Script::Handle(Z, metadata_field.Script()), Z,
-        ExternalTypedData::Handle(Z, metadata_field.KernelData()),
-        metadata_field.KernelDataProgramOffset(), &active_class);
-    return streaming_flow_graph_builder.EvaluateMetadata(
-        metadata_field.kernel_offset());
-  } else {
-    Thread* thread = Thread::Current();
-    Error& error = Error::Handle();
-    error = thread->sticky_error();
-    thread->clear_sticky_error();
-    return error.raw();
-  }
-}
-
-RawObject* BuildParameterDescriptor(const Function& function) {
-  LongJumpScope jump;
-  if (setjmp(*jump.Set()) == 0) {
-    Thread* thread = Thread::Current();
-    Zone* zone_ = thread->zone();
-    TranslationHelper helper(thread);
-    Script& script = Script::Handle(Z, function.script());
-    helper.InitFromScript(script);
-
-    StreamingFlowGraphBuilder streaming_flow_graph_builder(
-        &helper, Script::Handle(Z, function.script()), Z,
-        ExternalTypedData::Handle(Z, function.KernelData()),
-        function.KernelDataProgramOffset(), /* active_class = */ NULL);
-    return streaming_flow_graph_builder.BuildParameterDescriptor(
-        function.kernel_offset());
-  } else {
-    Thread* thread = Thread::Current();
-    Error& error = Error::Handle();
-    error = thread->sticky_error();
-    thread->clear_sticky_error();
-    return error.raw();
-  }
-}
-
-static int LowestFirst(const intptr_t* a, const intptr_t* b) {
-  return *a - *b;
-}
-
-/**
- * If index exists as sublist in list, sort the sublist from lowest to highest,
- * then copy it, as Smis and without duplicates,
- * to a new Array in Heap::kOld which is returned.
- * Note that the source list is both sorted and de-duplicated as well, but will
- * possibly contain duplicate and unsorted data at the end.
- * Otherwise (when sublist doesn't exist in list) return new empty array.
- */
-static RawArray* AsSortedDuplicateFreeArray(GrowableArray<intptr_t>* source) {
-  intptr_t size = source->length();
-  if (size == 0) {
-    return Object::empty_array().raw();
-  }
-
-  source->Sort(LowestFirst);
-
-  intptr_t last = 0;
-  for (intptr_t current = 1; current < size; ++current) {
-    if (source->At(last) != source->At(current)) {
-      (*source)[++last] = source->At(current);
-    }
-  }
-  Array& array_object = Array::Handle();
-  array_object = Array::New(last + 1, Heap::kOld);
-  Smi& smi_value = Smi::Handle();
-  for (intptr_t i = 0; i <= last; ++i) {
-    smi_value = Smi::New(source->At(i));
-    array_object.SetAt(i, smi_value);
-  }
-  return array_object.raw();
-}
-
-static void ProcessTokenPositionsEntry(
-    const ExternalTypedData& kernel_data,
-    const Script& script,
-    const Script& entry_script,
-    intptr_t kernel_offset,
-    intptr_t data_kernel_offset,
-    Zone* zone_,
-    TranslationHelper* helper,
-    GrowableArray<intptr_t>* token_positions,
-    GrowableArray<intptr_t>* yield_positions) {
-  if (kernel_data.IsNull()) {
-    return;
-  }
-
-  StreamingFlowGraphBuilder streaming_flow_graph_builder(
-      helper, script, zone_, kernel_data, data_kernel_offset,
-      /* active_class = */ NULL);
-  streaming_flow_graph_builder.CollectTokenPositionsFor(
-      script.kernel_script_index(), entry_script.kernel_script_index(),
-      kernel_offset, token_positions, yield_positions);
-}
-
-void CollectTokenPositionsFor(const Script& interesting_script) {
-  Thread* thread = Thread::Current();
-  Zone* zone_ = thread->zone();
-  TranslationHelper helper(thread);
-  helper.InitFromScript(interesting_script);
-
-  GrowableArray<intptr_t> token_positions(10);
-  GrowableArray<intptr_t> yield_positions(1);
-
-  Isolate* isolate = thread->isolate();
-  const GrowableObjectArray& libs =
-      GrowableObjectArray::Handle(Z, isolate->object_store()->libraries());
-  Library& lib = Library::Handle(Z);
-  Object& entry = Object::Handle(Z);
-  Script& entry_script = Script::Handle(Z);
-  ExternalTypedData& data = ExternalTypedData::Handle(Z);
-
-  auto& temp_array = Array::Handle(Z);
-  auto& temp_field = Field::Handle(Z);
-  auto& temp_function = Function::Handle(Z);
-  for (intptr_t i = 0; i < libs.Length(); i++) {
-    lib ^= libs.At(i);
-    DictionaryIterator it(lib);
-    while (it.HasNext()) {
-      entry = it.GetNext();
-      data = ExternalTypedData::null();
-      if (entry.IsClass()) {
-        const Class& klass = Class::Cast(entry);
-        if (klass.script() == interesting_script.raw()) {
-          token_positions.Add(klass.token_pos().value());
-        }
-        if (klass.is_finalized()) {
-          temp_array = klass.fields();
-          for (intptr_t i = 0; i < temp_array.Length(); ++i) {
-            temp_field ^= temp_array.At(i);
-            if (temp_field.kernel_offset() <= 0) {
-              // Skip artificially injected fields.
-              continue;
-            }
-            entry_script = temp_field.Script();
-            if (entry_script.raw() != interesting_script.raw()) {
-              continue;
-            }
-            data = temp_field.KernelData();
-            ProcessTokenPositionsEntry(data, interesting_script, entry_script,
-                                       temp_field.kernel_offset(),
-                                       temp_field.KernelDataProgramOffset(), Z,
-                                       &helper, &token_positions,
-                                       &yield_positions);
-          }
-          temp_array = klass.functions();
-          for (intptr_t i = 0; i < temp_array.Length(); ++i) {
-            temp_function ^= temp_array.At(i);
-            entry_script = temp_function.script();
-            if (entry_script.raw() != interesting_script.raw()) {
-              continue;
-            }
-            data = temp_function.KernelData();
-            ProcessTokenPositionsEntry(data, interesting_script, entry_script,
-                                       temp_function.kernel_offset(),
-                                       temp_function.KernelDataProgramOffset(),
-                                       Z, &helper, &token_positions,
-                                       &yield_positions);
-          }
-        } else {
-          // Class isn't finalized yet: read the data attached to it.
-          ASSERT(klass.kernel_offset() > 0);
-          data = lib.kernel_data();
-          ASSERT(!data.IsNull());
-          const intptr_t library_kernel_offset = lib.kernel_offset();
-          ASSERT(library_kernel_offset > 0);
-          const intptr_t class_offset = klass.kernel_offset();
-
-          entry_script = klass.script();
-          if (entry_script.raw() != interesting_script.raw()) {
-            continue;
-          }
-          ProcessTokenPositionsEntry(data, interesting_script, entry_script,
-                                     class_offset, library_kernel_offset, Z,
-                                     &helper, &token_positions,
-                                     &yield_positions);
-        }
-      } else if (entry.IsFunction()) {
-        temp_function ^= entry.raw();
-        entry_script = temp_function.script();
-        if (entry_script.raw() != interesting_script.raw()) {
-          continue;
-        }
-        data = temp_function.KernelData();
-        ProcessTokenPositionsEntry(data, interesting_script, entry_script,
-                                   temp_function.kernel_offset(),
-                                   temp_function.KernelDataProgramOffset(), Z,
-                                   &helper, &token_positions, &yield_positions);
-      } else if (entry.IsField()) {
-        const Field& field = Field::Cast(entry);
-        if (field.kernel_offset() <= 0) {
-          // Skip artificially injected fields.
-          continue;
-        }
-        entry_script = field.Script();
-        if (entry_script.raw() != interesting_script.raw()) {
-          continue;
-        }
-        data = field.KernelData();
-        ProcessTokenPositionsEntry(data, interesting_script, entry_script,
-                                   field.kernel_offset(),
-                                   field.KernelDataProgramOffset(), Z, &helper,
-                                   &token_positions, &yield_positions);
-      }
-    }
-  }
-
-  Script& script = Script::Handle(Z, interesting_script.raw());
-  Array& array_object = Array::Handle(Z);
-  array_object = AsSortedDuplicateFreeArray(&token_positions);
-  script.set_debug_positions(array_object);
-  array_object = AsSortedDuplicateFreeArray(&yield_positions);
-  script.set_yield_positions(array_object);
+void FlowGraphBuilder::SetCurrentTryCatchBlock(TryCatchBlock* try_catch_block) {
+  try_catch_block_ = try_catch_block;
+  SetCurrentTryIndex(try_catch_block == nullptr
+                         ? CatchClauseNode::kInvalidTryIndex
+                         : try_catch_block->try_index());
 }
 
 }  // namespace kernel

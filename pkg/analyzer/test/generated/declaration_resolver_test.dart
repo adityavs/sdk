@@ -10,7 +10,6 @@ import 'package:analyzer/src/dart/ast/ast.dart';
 import 'package:analyzer/src/dart/ast/utilities.dart';
 import 'package:analyzer/src/dart/element/element.dart';
 import 'package:analyzer/src/generated/declaration_resolver.dart';
-import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/task/api/dart.dart';
 import 'package:analyzer/src/task/dart.dart';
@@ -30,7 +29,7 @@ main() {
 
 CompilationUnit _cloneResolveUnit(CompilationUnit unit) {
   CompilationUnit clonedUnit = AstCloner.clone(unit);
-  new DeclarationResolver().resolve(clonedUnit, unit.element);
+  new DeclarationResolver().resolve(clonedUnit, unit.declaredElement);
   return clonedUnit;
 }
 
@@ -119,7 +118,7 @@ const b = null;
 ''');
     expect(unit.directives[0].metadata.single.name.name, 'a');
     expect(unit.directives[1].metadata.single.name.name, 'b');
-    var unitElement = unit.element as CompilationUnitElementImpl;
+    var unitElement = unit.declaredElement as CompilationUnitElementImpl;
     // Damage the unit element - as if "setAnnotations" were not called.
     // The ExportElement(s) still have the metadata, we should use it.
     unitElement.setAnnotations(unit.directives[0].offset, []);
@@ -128,7 +127,7 @@ const b = null;
     expect(unitElement.library.exports[1].metadata, hasLength(1));
     // DeclarationResolver on the clone should succeed.
     CompilationUnit clonedUnit = AstCloner.clone(unit);
-    new DeclarationResolver().resolve(clonedUnit, unit.element);
+    new DeclarationResolver().resolve(clonedUnit, unit.declaredElement);
     expect(unit.directives[0].metadata.single.name.name, 'a');
     expect(unit.directives[1].metadata.single.name.name, 'b');
   }
@@ -208,7 +207,7 @@ const b = null;
 ''');
     expect(unit.directives[0].metadata.single.name.name, 'a');
     expect(unit.directives[1].metadata.single.name.name, 'b');
-    var unitElement = unit.element as CompilationUnitElementImpl;
+    var unitElement = unit.declaredElement as CompilationUnitElementImpl;
     // Damage the unit element - as if "setAnnotations" were not called.
     // The ImportElement(s) still have the metadata, we should use it.
     unitElement.setAnnotations(unit.directives[0].offset, []);
@@ -217,7 +216,7 @@ const b = null;
     expect(unitElement.library.imports[1].metadata, hasLength(1));
     // DeclarationResolver on the clone should succeed.
     CompilationUnit clonedUnit = AstCloner.clone(unit);
-    new DeclarationResolver().resolve(clonedUnit, unit.element);
+    new DeclarationResolver().resolve(clonedUnit, unit.declaredElement);
     expect(unit.directives[0].metadata.single.name.name, 'a');
     expect(unit.directives[1].metadata.single.name.name, 'b');
   }
@@ -230,14 +229,14 @@ const b = null;
   test_metadata_libraryDirective_resynthesized() async {
     CompilationUnit unit = await resolveSource('@a library L; const a = null;');
     expect(unit.directives.single.metadata.single.name.name, 'a');
-    var unitElement = unit.element as CompilationUnitElementImpl;
+    var unitElement = unit.declaredElement as CompilationUnitElementImpl;
     // Damage the unit element - as if "setAnnotations" were not called.
     // The LibraryElement still has the metadata, we should use it.
     unitElement.setAnnotations(unit.directives.single.offset, []);
     expect(unitElement.library.metadata, hasLength(1));
     // DeclarationResolver on the clone should succeed.
     CompilationUnit clonedUnit = AstCloner.clone(unit);
-    new DeclarationResolver().resolve(clonedUnit, unit.element);
+    new DeclarationResolver().resolve(clonedUnit, unit.declaredElement);
     expect(clonedUnit.directives.single.metadata.single.name.name, 'a');
   }
 
@@ -299,7 +298,7 @@ const b = null;
 ''');
     expect(unit.directives[1].metadata.single.name.name, 'a');
     expect(unit.directives[2].metadata.single.name.name, 'b');
-    var unitElement = unit.element as CompilationUnitElementImpl;
+    var unitElement = unit.declaredElement as CompilationUnitElementImpl;
     // Damage the unit element - as if "setAnnotations" were not called.
     // The ImportElement(s) still have the metadata, we should use it.
     unitElement.setAnnotations(unit.directives[1].offset, []);
@@ -308,7 +307,7 @@ const b = null;
     expect(unitElement.library.parts[1].metadata, hasLength(1));
     // DeclarationResolver on the clone should succeed.
     CompilationUnit clonedUnit = AstCloner.clone(unit);
-    new DeclarationResolver().resolve(clonedUnit, unit.element);
+    new DeclarationResolver().resolve(clonedUnit, unit.declaredElement);
     expect(unit.directives[1].metadata.single.name.name, 'a');
     expect(unit.directives[2].metadata.single.name.name, 'b');
   }
@@ -815,7 +814,7 @@ part 'foo.bar';
 class StrongModeDeclarationResolverTest extends ResolverTestCase {
   @override
   void setUp() {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
+    reset();
   }
 
   test_genericFunction_typeParameter() async {
@@ -833,13 +832,13 @@ class StrongModeDeclarationResolverTest extends ResolverTestCase {
     expect(tElement, isNotNull);
     expect(element.typeParameters.toString(), "[T]");
     expect(element.type.toString(), "<T>(T, T) → T");
-    expect(t.element, same(tElement));
+    expect(t.declaredElement, same(tElement));
 
     // re-resolve
     CompilationUnit unit2 = _cloneResolveUnit(unit);
     node = _findSimpleIdentifier(unit2, code, 'max').parent;
     t = node.functionExpression.typeParameters.typeParameters[0];
-    expect(t.element, same(tElement));
+    expect(t.declaredElement, same(tElement));
   }
 
   test_genericMethod_typeParameter() async {
@@ -859,12 +858,12 @@ class C {
     expect(tElement, isNotNull);
     expect(element.typeParameters.toString(), "[T]");
     expect(element.type.toString(), "<T>(T, T) → T");
-    expect(t.element, same(tElement));
+    expect(t.declaredElement, same(tElement));
 
     // re-resolve
     CompilationUnit unit2 = _cloneResolveUnit(unit);
     node = _findSimpleIdentifier(unit2, code, 'max').parent;
     t = node.typeParameters.typeParameters[0];
-    expect(t.element, same(tElement));
+    expect(t.declaredElement, same(tElement));
   }
 }

@@ -1,7 +1,8 @@
 analyzer:
-  strong-mode: true
+  strong-mode:
+    implicit-casts: false
   exclude:
-    - 'test/data'
+    - test/data/**
 linter:
   rules:
     #- annotate_overrides

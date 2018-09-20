@@ -253,7 +253,7 @@ class FindNothing : public FindObjectVisitor {
   virtual bool FindObject(RawObject* obj) const { return false; }
 };
 
-TEST_CASE(FindObject) {
+ISOLATE_UNIT_TEST_CASE(FindObject) {
   Isolate* isolate = Isolate::Current();
   Heap* heap = isolate->heap();
   Heap::Space spaces[2] = {Heap::kOld, Heap::kNew};
@@ -272,7 +272,7 @@ TEST_CASE(FindObject) {
   }
 }
 
-TEST_CASE(IterateReadOnly) {
+ISOLATE_UNIT_TEST_CASE(IterateReadOnly) {
   const String& obj = String::Handle(String::New("x", Heap::kOld));
   Heap* heap = Thread::Current()->isolate()->heap();
   EXPECT(heap->Contains(RawObject::ToAddr(obj.raw())));
@@ -574,6 +574,41 @@ ISOLATE_UNIT_TEST_CASE(CollectAllGarbage_LiveOldToNewChain) {
       heap->new_space()->UsedInWords() + heap->old_space()->UsedInWords();
 
   EXPECT(size_before < size_after);
+}
+
+static void NoopFinalizer(void* isolate_callback_data,
+                          Dart_WeakPersistentHandle handle,
+                          void* peer) {}
+
+ISOLATE_UNIT_TEST_CASE(ExternalPromotion) {
+  Isolate* isolate = Isolate::Current();
+  Heap* heap = isolate->heap();
+
+  heap->CollectAllGarbage();
+  intptr_t size_before = kWordSize * (heap->new_space()->ExternalInWords() +
+                                      heap->old_space()->ExternalInWords());
+
+  Array& old = Array::Handle(Array::New(100, Heap::kOld));
+  Array& neu = Array::Handle();
+  for (intptr_t i = 0; i < 100; i++) {
+    neu = Array::New(1, Heap::kNew);
+    FinalizablePersistentHandle::New(isolate, neu, NULL, NoopFinalizer, 1 * MB);
+    old.SetAt(i, neu);
+  }
+
+  intptr_t size_middle = kWordSize * (heap->new_space()->ExternalInWords() +
+                                      heap->old_space()->ExternalInWords());
+  EXPECT_EQ(size_before + 100 * MB, size_middle);
+
+  old = Array::null();
+  neu = Array::null();
+
+  heap->CollectAllGarbage();
+
+  intptr_t size_after = kWordSize * (heap->new_space()->ExternalInWords() +
+                                     heap->old_space()->ExternalInWords());
+
+  EXPECT_EQ(size_before, size_after);
 }
 
 }  // namespace dart

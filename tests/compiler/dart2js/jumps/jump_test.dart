@@ -10,9 +10,10 @@ import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/diagnostics/diagnostic_listener.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/elements/jumps.dart';
+import 'package:compiler/src/js_model/element_map.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/js_model/locals.dart';
 import 'package:compiler/src/kernel/element_map.dart';
-import 'package:compiler/src/kernel/kernel_backend_strategy.dart';
 import '../equivalence/id_equivalence.dart';
 import '../equivalence/id_equivalence_helper.dart';
 import 'package:kernel/ast.dart' as ir;
@@ -20,26 +21,31 @@ import 'package:kernel/ast.dart' as ir;
 main(List<String> args) {
   asyncTest(() async {
     Directory dataDir = new Directory.fromUri(Platform.script.resolve('data'));
-    await checkTests(dataDir, computeKernelJumpsData,
+    await checkTests(dataDir, const JumpDataComputer(),
         options: [Flags.disableTypeInference, stopAfterTypeInference],
         args: args);
   });
 }
 
-/// Compute closure data mapping for [member] as a kernel based element.
-///
-/// Fills [actualMap] with the data and [sourceSpanMap] with the source spans
-/// for the data origin.
-void computeKernelJumpsData(
-    Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  GlobalLocalsMap localsMap = backendStrategy.globalLocalsMapForTesting;
-  MemberDefinition definition = elementMap.getMemberDefinition(member);
-  new JumpsIrChecker(
-          compiler.reporter, actualMap, localsMap.getLocalsMap(member))
-      .run(definition.node);
+class JumpDataComputer extends DataComputer {
+  const JumpDataComputer();
+
+  /// Compute closure data mapping for [member] as a kernel based element.
+  ///
+  /// Fills [actualMap] with the data and [sourceSpanMap] with the source spans
+  /// for the data origin.
+  @override
+  void computeMemberData(
+      Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
+      {bool verbose: false}) {
+    JsBackendStrategy backendStrategy = compiler.backendStrategy;
+    JsToElementMap elementMap = backendStrategy.elementMap;
+    GlobalLocalsMap localsMap = backendStrategy.globalLocalsMapForTesting;
+    MemberDefinition definition = elementMap.getMemberDefinition(member);
+    new JumpsIrChecker(
+            compiler.reporter, actualMap, localsMap.getLocalsMap(member))
+        .run(definition.node);
+  }
 }
 
 class TargetData {
@@ -64,12 +70,17 @@ class GotoData {
   String toString() => 'GotoData(id=$id,sourceSpan=$sourceSpan,target=$target)';
 }
 
-abstract class JumpsMixin {
+/// Kernel IR visitor for computing jump data.
+class JumpsIrChecker extends IrDataExtractor {
+  final KernelToLocalsMap _localsMap;
+
   int index = 0;
   Map<JumpTarget, TargetData> targets = <JumpTarget, TargetData>{};
   List<GotoData> gotos = <GotoData>[];
 
-  void registerValue(SourceSpan sourceSpan, Id id, String value, Object object);
+  JumpsIrChecker(DiagnosticReporter reporter, Map<Id, ActualData> actualMap,
+      this._localsMap)
+      : super(reporter, actualMap);
 
   void processData() {
     targets.forEach((JumpTarget target, TargetData data) {
@@ -101,15 +112,6 @@ abstract class JumpsMixin {
       registerValue(data.sourceSpan, data.id, value, data);
     });
   }
-}
-
-/// Kernel IR visitor for computing jump data.
-class JumpsIrChecker extends IrDataExtractor with JumpsMixin {
-  final KernelToLocalsMap _localsMap;
-
-  JumpsIrChecker(DiagnosticReporter reporter, Map<Id, ActualData> actualMap,
-      this._localsMap)
-      : super(reporter, actualMap);
 
   void run(ir.Node root) {
     super.run(root);

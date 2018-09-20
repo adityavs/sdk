@@ -312,7 +312,8 @@ def GetBuildDir(host_os):
 def GetBuildRoot(host_os, mode=None, arch=None, target_os=None):
   build_root = GetBuildDir(host_os)
   if mode:
-    build_root = os.path.join(build_root, GetBuildConf(mode, arch, target_os))
+    build_root = os.path.join(build_root,
+                              GetBuildConf(mode, arch, target_os))
   return build_root
 
 

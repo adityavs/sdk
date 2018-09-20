@@ -8,11 +8,12 @@ import 'dart:collection' show Queue;
 import 'package:front_end/src/fasta/util/link.dart' show Link;
 
 import '../common.dart';
+import '../common/names.dart';
 import '../common/codegen.dart' show CodegenRegistry, CodegenWorkItem;
 import '../common/tasks.dart' show CompilerTask;
 import '../constants/constant_system.dart';
 import '../constants/values.dart';
-import '../common_elements.dart' show CommonElements;
+import '../common_elements.dart' show JCommonElements;
 import '../elements/entities.dart';
 import '../elements/jumps.dart';
 import '../elements/types.dart';
@@ -237,7 +238,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
 
   CodegenRegistry get _registry => _work.registry;
 
-  CommonElements get _commonElements => _closedWorld.commonElements;
+  JCommonElements get _commonElements => _closedWorld.commonElements;
 
   ConstantSystem get _constantSystem => _closedWorld.constantSystem;
 
@@ -1835,7 +1836,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       // type because our optimizations might end up in a state where the
       // invoke dynamic knows more than the receiver.
       ClassEntity enclosing = node.element.enclosingClass;
-      if (_closedWorld.isInstantiated(enclosing)) {
+      if (_closedWorld.classHierarchy.isInstantiated(enclosing)) {
         return _abstractValueDomain.createNonNullExact(enclosing);
       } else {
         // The element is mixed in so a non-null subtype mask is the most
@@ -1849,9 +1850,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
         return _abstractValueDomain.createNonNullSubtype(enclosing);
       }
     }
-    // If [JSInvocationMirror._invokeOn] is enabled, and this call
-    // might hit a `noSuchMethod`, we register an untyped selector.
-    return _closedWorld.extendMaskIfReachesAll(selector, mask);
+    return mask ?? _abstractValueDomain.dynamicType;
   }
 
   void registerMethodInvoke(HInvokeDynamic node) {
@@ -1861,7 +1860,13 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     // we need to register that fact that we may be calling a closure
     // with the same arguments.
     MemberEntity target = node.element;
-    if (target == null || target.isGetter) {
+    if ((target == null || target.isGetter) &&
+        // TODO(johnniwinther): Remove this when kernel adds an `isFunctionCall`
+        // flag to [ir.MethodInvocation]. Currently we can't tell the difference
+        // between a dynamic call and a function call, but we at least know that
+        // toString is not a getter (a potential function call should otherwise
+        // have been register for string concatenation).
+        selector != Selectors.toString_) {
       // TODO(kasperl): If we have a typed selector for the call, we
       // may know something about the types of closures that need
       // the specific closure call method.
@@ -2208,6 +2213,11 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     generateConstant(node.constant, node.sourceInformation);
 
     _registry.registerConstantUse(new ConstantUse.literal(node.constant));
+    if (node.constant.isType) {
+      TypeConstantValue typeConstant = node.constant;
+      _registry.registerTypeUse(
+          new TypeUse.constTypeLiteral(typeConstant.representedType));
+    }
   }
 
   visitNot(HNot node) {
@@ -2754,7 +2764,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   void checkTypeViaInstanceof(HInstruction input, InterfaceType type,
       SourceInformation sourceInformation,
       {bool negative: false}) {
-    _registry.registerTypeUse(new TypeUse.isCheck(type));
+    _registry.registerTypeUse(new TypeUse.instanceConstructor(type));
 
     use(input);
 
@@ -2764,7 +2774,6 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     if (negative) {
       push(new js.Prefix('!', pop()).withSourceInformation(sourceInformation));
     }
-    _registry.registerInstantiation(type);
   }
 
   void handleNumberOrStringSupertypeCheck(
@@ -3093,6 +3102,10 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
 
   void visitTypeInfoExpression(HTypeInfoExpression node) {
     DartType type = node.dartType;
+    if (node.isTypeVariableReplacement) {
+      _registry.registerTypeUse(new TypeUse.typeArgument(type));
+    }
+
     List<js.Expression> arguments = <js.Expression>[];
     for (HInstruction input in node.inputs) {
       use(input);
@@ -3141,7 +3154,8 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
 
     if (_closedWorld.isUsedAsMixin(cls)) return true;
 
-    return _closedWorld.anyStrictSubclassOf(cls, (ClassEntity subclass) {
+    return _closedWorld.classHierarchy.anyStrictSubclassOf(cls,
+        (ClassEntity subclass) {
       return !_rtiSubstitutions.isTrivialSubstitution(subclass, cls);
     });
   }

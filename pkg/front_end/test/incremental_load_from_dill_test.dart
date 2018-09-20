@@ -33,8 +33,14 @@ import 'package:front_end/src/fasta/severity.dart' show Severity;
 
 import 'package:kernel/kernel.dart' show Component;
 
+import 'package:kernel/target/targets.dart' show TargetFlags;
+
+import 'package:kernel/text/ast_to_text.dart' show componentToString;
+
 import "package:testing/testing.dart"
     show Chain, ChainContext, Result, Step, TestDescription, runMe;
+
+import "package:vm/target/vm.dart" show VmTarget;
 
 import "package:yaml/yaml.dart" show YamlList, YamlMap, loadYamlNode;
 
@@ -55,8 +61,8 @@ class Context extends ChainContext {
   ];
 
   @override
-  void cleanUp(TestDescription description, Result result) {
-    cleanupHelper?.outDir?.deleteSync(recursive: true);
+  Future<void> cleanUp(TestDescription description, Result result) async {
+    await cleanupHelper?.outDir?.delete(recursive: true);
   }
 
   TestData cleanupHelper;
@@ -273,6 +279,7 @@ Future<Null> newWorldTest(bool strong, List worlds) async {
     util.throwOnEmptyMixinBodies(component);
     print("Compile took ${stopwatch.elapsedMilliseconds} ms");
     newestWholeComponent = serializeComponent(component);
+    print("*****\n\ncomponent:\n${componentToString(component)}\n\n\n");
     if (component.libraries.length != world["expectedLibraryCount"]) {
       throw "Expected ${world["expectedLibraryCount"]} libraries, "
           "got ${component.libraries.length}";
@@ -313,6 +320,7 @@ Future<Null> newWorldTest(bool strong, List worlds) async {
       performErrorAndWarningCheck(
           world, gotError, formattedErrors, gotWarning, formattedWarnings);
       List<int> thisWholeComponent = serializeComponent(component2);
+      print("*****\n\ncomponent2:\n${componentToString(component2)}\n\n\n");
       checkIsEqual(newestWholeComponent, thisWholeComponent);
     }
   }
@@ -343,7 +351,7 @@ void checkIsEqual(List<int> a, List<int> b) {
   }
   for (int i = 0; i < length; ++i) {
     if (a[i] != b[i]) {
-      Expect.fail("Data differs at byte ${i+1}.");
+      Expect.fail("Data differs at byte ${i + 1}.");
     }
   }
   Expect.equals(a.length, b.length);
@@ -353,6 +361,7 @@ CompilerOptions getOptions(bool strong) {
   final Uri sdkRoot = computePlatformBinariesLocation();
   CompilerOptions options = new CompilerOptions()
     ..sdkRoot = sdkRoot
+    ..target = new VmTarget(new TargetFlags(strongMode: strong))
     ..librariesSpecificationUri = Uri.base.resolve("sdk/lib/libraries.json")
     ..onProblem = (FormattedMessage problem, Severity severity,
         List<FormattedMessage> context) {
@@ -474,7 +483,9 @@ class TestIncrementalCompiler extends IncrementalCompiler {
 
   TestIncrementalCompiler(CompilerOptions options, this.entryPoint,
       [Uri initializeFrom])
-      : super(new CompilerContext(new ProcessedOptions(options, [entryPoint])),
+      : super(
+            new CompilerContext(
+                new ProcessedOptions(options: options, inputs: [entryPoint])),
             initializeFrom);
 
   @override

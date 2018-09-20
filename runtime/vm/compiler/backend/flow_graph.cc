@@ -12,9 +12,11 @@
 #include "vm/compiler/backend/il_printer.h"
 #include "vm/compiler/backend/range_analysis.h"
 #include "vm/compiler/cha.h"
+#include "vm/compiler/compiler_state.h"
 #include "vm/compiler/frontend/flow_graph_builder.h"
 #include "vm/growable_array.h"
 #include "vm/object_store.h"
+#include "vm/resolver.h"
 
 namespace dart {
 
@@ -406,7 +408,9 @@ void FlowGraph::ComputeIsReceiver(PhiInstr* phi) const {
 bool FlowGraph::IsReceiver(Definition* def) const {
   def = def->OriginalDefinition();  // Could be redefined.
   if (def->IsParameter()) return (def->AsParameter()->index() == 0);
-  if (!def->IsPhi() || graph_entry()->catch_entries().is_empty()) return false;
+  if (!def->IsPhi() || graph_entry()->HasSingleEntryPoint()) {
+    return false;
+  }
   PhiInstr* phi = def->AsPhi();
   if (phi->is_receiver() != PhiInstr::kUnknownReceiver) {
     return (phi->is_receiver() == PhiInstr::kReceiver);
@@ -416,38 +420,108 @@ bool FlowGraph::IsReceiver(Definition* def) const {
   return (phi->is_receiver() == PhiInstr::kReceiver);
 }
 
-// Use CHA to determine if the call needs a class check: if the callee's
-// receiver is the same as the caller's receiver and there are no overridden
-// callee functions, then no class check is needed.
-bool FlowGraph::InstanceCallNeedsClassCheck(InstanceCallInstr* call,
-                                            RawFunction::Kind kind) const {
+FlowGraph::ToCheck FlowGraph::CheckForInstanceCall(
+    InstanceCallInstr* call,
+    RawFunction::Kind kind) const {
   if (!FLAG_use_cha_deopt && !isolate()->all_classes_finalized()) {
     // Even if class or function are private, lazy class finalization
     // may later add overriding methods.
-    return true;
+    return ToCheck::kCheckCid;
   }
-  Definition* callee_receiver = call->Receiver()->definition();
-  ASSERT(callee_receiver != NULL);
-  if (function().IsDynamicFunction() && IsReceiver(callee_receiver)) {
-    const String& name =
-        (kind == RawFunction::kMethodExtractor)
-            ? String::Handle(zone(),
-                             Field::NameFromGetter(call->function_name()))
-            : call->function_name();
-    const Class& cls = Class::Handle(zone(), function().Owner());
-    intptr_t subclass_count = 0;
-    if (!thread()->cha()->HasOverride(cls, name, &subclass_count)) {
-      if (FLAG_trace_cha) {
-        THR_Print(
-            "  **(CHA) Instance call needs no check, "
-            "no overrides of '%s' '%s'\n",
-            name.ToCString(), cls.ToCString());
+
+  // Best effort to get the receiver class.
+  Value* receiver = call->Receiver();
+  Class& receiver_class = Class::Handle(zone());
+  bool receiver_maybe_null = false;
+  if (function().IsDynamicFunction() && IsReceiver(receiver->definition())) {
+    // Call receiver is callee receiver: calling "this.g()" in f().
+    receiver_class = function().Owner();
+  } else if (isolate()->can_use_strong_mode_types()) {
+    // In strong mode, get the receiver's compile type. Note that
+    // we allow nullable types, which may result in just generating
+    // a null check rather than the more elaborate class check
+    CompileType* type = receiver->Type();
+    const AbstractType* atype = type->ToAbstractType();
+    if (atype->IsInstantiated() && atype->HasResolvedTypeClass() &&
+        !atype->IsDynamicType()) {
+      if (type->is_nullable()) {
+        receiver_maybe_null = true;
       }
-      thread()->cha()->AddToGuardedClasses(cls, subclass_count);
-      return false;
+      receiver_class = atype->type_class();
+      if (receiver_class.is_implemented()) {
+        receiver_class = Class::null();
+      }
     }
   }
-  return true;
+
+  // Useful receiver class information?
+  if (receiver_class.IsNull()) {
+    return ToCheck::kCheckCid;
+  } else if (call->HasICData()) {
+    // If the static class type does not match information found in ICData
+    // (which may be "guessed"), then bail, since subsequent code generation
+    // (AOT and JIT) for inlining uses the latter.
+    // TODO(ajcbik): improve this by using the static class.
+    const intptr_t cid = receiver_class.id();
+    const ICData* data = call->ic_data();
+    bool match = false;
+    Class& cls = Class::Handle(zone());
+    Function& fun = Function::Handle(zone());
+    for (intptr_t i = 0, len = data->NumberOfChecks(); i < len; i++) {
+      fun = data->GetTargetAt(i);
+      cls = fun.Owner();
+      if (data->GetReceiverClassIdAt(i) == cid || cls.id() == cid) {
+        match = true;
+        break;
+      }
+    }
+    if (!match) {
+      return ToCheck::kCheckCid;
+    }
+  }
+
+  const String& method_name =
+      (kind == RawFunction::kMethodExtractor)
+          ? String::Handle(zone(), Field::NameFromGetter(call->function_name()))
+          : call->function_name();
+
+  // If the receiver can have the null value, exclude any method
+  // that is actually valid on a null receiver.
+  if (receiver_maybe_null) {
+#ifdef TARGET_ARCH_DBC
+    // TODO(ajcbik): DBC does not support null check at all yet.
+    return ToCheck::kCheckCid;
+#else
+    const Class& null_class =
+        Class::Handle(zone(), isolate()->object_store()->null_class());
+    const Function& target = Function::Handle(
+        zone(),
+        Resolver::ResolveDynamicAnyArgs(zone(), null_class, method_name));
+    if (!target.IsNull()) {
+      return ToCheck::kCheckCid;
+    }
+#endif
+  }
+
+  // Use CHA to determine if the method is not overridden by any subclass
+  // of the receiver class. Any methods that are valid when the receiver
+  // has a null value are excluded above (to avoid throwing an exception
+  // on something valid, like null.hashCode).
+  intptr_t subclass_count = 0;
+  CHA& cha = thread()->compiler_state().cha();
+  if (!cha.HasOverride(receiver_class, method_name, &subclass_count)) {
+    if (FLAG_trace_cha) {
+      THR_Print(
+          "  **(CHA) Instance call needs no class check since there "
+          "are no overrides of method '%s' on '%s'\n",
+          method_name.ToCString(), receiver_class.ToCString());
+    }
+    if (FLAG_use_cha_deopt) {
+      cha.AddToGuardedClasses(receiver_class, subclass_count);
+    }
+    return receiver_maybe_null ? ToCheck::kCheckNull : ToCheck::kNoCheck;
+  }
+  return ToCheck::kCheckCid;
 }
 
 Instruction* FlowGraph::CreateCheckClass(Definition* to_check,
@@ -460,6 +534,30 @@ Instruction* FlowGraph::CreateCheckClass(Definition* to_check,
   }
   return new (zone())
       CheckClassInstr(new (zone()) Value(to_check), deopt_id, cids, token_pos);
+}
+
+void FlowGraph::AddExactnessGuard(InstanceCallInstr* call,
+                                  intptr_t receiver_cid) {
+  const Class& cls = Class::Handle(
+      zone(), Isolate::Current()->class_table()->At(receiver_cid));
+
+  Definition* load_type_args = new (zone())
+      LoadFieldInstr(call->Receiver()->CopyWithType(),
+                     NativeFieldDesc::GetTypeArgumentsFieldFor(zone(), cls),
+                     call->token_pos());
+  InsertBefore(call, load_type_args, call->env(), FlowGraph::kValue);
+
+  const AbstractType& type =
+      AbstractType::Handle(zone(), call->ic_data()->StaticReceiverType());
+  ASSERT(!type.IsNull());
+  const TypeArguments& args = TypeArguments::Handle(zone(), type.arguments());
+  Instruction* guard = new (zone()) CheckConditionInstr(
+      new StrictCompareInstr(call->token_pos(), Token::kEQ_STRICT,
+                             new (zone()) Value(load_type_args),
+                             new (zone()) Value(GetConstant(args)),
+                             /*needs_number_check=*/false, call->deopt_id()),
+      call->deopt_id());
+  InsertBefore(call, guard, call->env(), FlowGraph::kEffect);
 }
 
 bool FlowGraph::VerifyUseLists() {
@@ -950,7 +1048,7 @@ void FlowGraph::Rename(GrowableArray<PhiInstr*>* live_phis,
 
   // Check if inlining_parameters include a type argument vector parameter.
   const intptr_t inlined_type_args_param =
-      (isolate()->reify_generic_functions() && (inlining_parameters != NULL) &&
+      (FLAG_reify_generic_functions && (inlining_parameters != NULL) &&
        function().IsGeneric())
           ? 1
           : 0;
@@ -993,7 +1091,7 @@ void FlowGraph::Rename(GrowableArray<PhiInstr*>* live_phis,
 
     if (!IsCompiledForOsr()) {
       const bool reify_generic_argument =
-          function().IsGeneric() && isolate()->reify_generic_functions();
+          function().IsGeneric() && FLAG_reify_generic_functions;
 
       // Replace the type arguments slot with a special parameter.
       if (reify_generic_argument) {
@@ -1018,7 +1116,7 @@ void FlowGraph::Rename(GrowableArray<PhiInstr*>* live_phis,
       if (parsed_function().has_arg_desc_var()) {
         Definition* defn =
             new SpecialParameterInstr(SpecialParameterInstr::kArgDescriptor,
-                                      Thread::kNoDeoptId, graph_entry_);
+                                      DeoptId::kNone, graph_entry_);
         AllocateSSAIndexes(defn);
         AddToInitialDefinitions(defn);
         env[ArgumentDescriptorEnvIndex()] = defn;
@@ -1096,10 +1194,10 @@ void FlowGraph::RenameRecursive(BlockEntryInstr* block_entry,
       Definition* param = nullptr;
       if (raw_exception_var_envindex == i) {
         param = new SpecialParameterInstr(SpecialParameterInstr::kException,
-                                          Thread::kNoDeoptId, catch_entry);
+                                          DeoptId::kNone, catch_entry);
       } else if (raw_stacktrace_var_envindex == i) {
         param = new SpecialParameterInstr(SpecialParameterInstr::kStackTrace,
-                                          Thread::kNoDeoptId, catch_entry);
+                                          DeoptId::kNone, catch_entry);
       } else {
         param = new (zone()) ParameterInstr(i, block_entry);
       }
@@ -1217,8 +1315,7 @@ void FlowGraph::RenameRecursive(BlockEntryInstr* block_entry,
           captured_parameters_->Add(index);
         }
 
-        if ((phi != NULL) && isolate()->strong() &&
-            FLAG_use_strong_mode_types) {
+        if ((phi != NULL) && isolate()->can_use_strong_mode_types()) {
           // Assign type to Phi if it doesn't have a type yet.
           // For a Phi to appear in the local variable it either was placed
           // there as incoming value by renaming or it was stored there by
@@ -1334,7 +1431,7 @@ void FlowGraph::RenameRecursive(BlockEntryInstr* block_entry,
 void FlowGraph::RemoveDeadPhis(GrowableArray<PhiInstr*>* live_phis) {
   // Augment live_phis with those that have implicit real used at
   // potentially throwing instructions if there is a try-catch in this graph.
-  if (graph_entry()->SuccessorCount() > 1) {
+  if (!graph_entry()->catch_entries().is_empty()) {
     for (BlockIterator it(postorder_iterator()); !it.Done(); it.Advance()) {
       JoinEntryInstr* join = it.Current()->AsJoinEntry();
       if (join == NULL) continue;
@@ -1554,7 +1651,7 @@ void FlowGraph::InsertConversion(Representation from,
   if (IsUnboxedInteger(from) && IsUnboxedInteger(to)) {
     const intptr_t deopt_id = (to == kUnboxedInt32) && (deopt_target != NULL)
                                   ? deopt_target->DeoptimizationTarget()
-                                  : Thread::kNoDeoptId;
+                                  : DeoptId::kNone;
     converted = new (Z)
         UnboxedIntConverterInstr(from, to, use->CopyWithType(), deopt_id);
   } else if ((from == kUnboxedInt32) && (to == kUnboxedDouble)) {
@@ -1563,13 +1660,13 @@ void FlowGraph::InsertConversion(Representation from,
              CanConvertInt64ToDouble()) {
     const intptr_t deopt_id = (deopt_target != NULL)
                                   ? deopt_target->DeoptimizationTarget()
-                                  : Thread::kNoDeoptId;
+                                  : DeoptId::kNone;
     ASSERT(CanUnboxDouble());
     converted = new Int64ToDoubleInstr(use->CopyWithType(), deopt_id);
   } else if ((from == kTagged) && Boxing::Supports(to)) {
     const intptr_t deopt_id = (deopt_target != NULL)
                                   ? deopt_target->DeoptimizationTarget()
-                                  : Thread::kNoDeoptId;
+                                  : DeoptId::kNone;
     converted = UnboxInstr::Create(to, use->CopyWithType(), deopt_id,
                                    use->instruction()->speculative_mode());
   } else if ((to == kTagged) && Boxing::Supports(from)) {
@@ -1581,7 +1678,7 @@ void FlowGraph::InsertConversion(Representation from,
     // trigger a deoptimization if executed. See #12417 for a discussion.
     const intptr_t deopt_id = (deopt_target != NULL)
                                   ? deopt_target->DeoptimizationTarget()
-                                  : Thread::kNoDeoptId;
+                                  : DeoptId::kNone;
     ASSERT(Boxing::Supports(from));
     ASSERT(Boxing::Supports(to));
     Definition* boxed = BoxInstr::Create(from, use->CopyWithType());
@@ -1605,31 +1702,11 @@ void FlowGraph::InsertConversion(Representation from,
   }
 }
 
-void FlowGraph::ConvertEnvironmentUse(Value* use, Representation from_rep) {
-  const Representation to_rep = kTagged;
-  if (from_rep == to_rep) {
-    return;
-  }
-  InsertConversion(from_rep, to_rep, use, /*is_environment_use=*/true);
-}
-
 void FlowGraph::InsertConversionsFor(Definition* def) {
   const Representation from_rep = def->representation();
 
   for (Value::Iterator it(def->input_use_list()); !it.Done(); it.Advance()) {
     ConvertUse(it.Current(), from_rep);
-  }
-
-  if (graph_entry()->SuccessorCount() > 1) {
-    for (Value::Iterator it(def->env_use_list()); !it.Done(); it.Advance()) {
-      Value* use = it.Current();
-      if (use->instruction()->MayThrow() &&
-          use->instruction()->GetBlock()->InsideTryBlock()) {
-        // Environment uses at calls inside try-blocks must be converted to
-        // tagged representation.
-        ConvertEnvironmentUse(it.Current(), from_rep);
-      }
-    }
   }
 }
 
@@ -1659,9 +1736,9 @@ static void UnboxPhi(PhiInstr* phi) {
       break;
   }
 
-  if ((kSmiBits < 32) && (unboxed == kTagged) && phi->Type()->IsInt() &&
+  if ((unboxed == kTagged) && phi->Type()->IsInt() &&
       RangeUtils::Fits(phi->range(), RangeBoundary::kRangeBoundaryInt64)) {
-    // On 32-bit platforms conservatively unbox phis that:
+    // Conservatively unbox phis that:
     //   - are proven to be of type Int;
     //   - fit into 64bits range;
     //   - have either constants or Box() operations as inputs;
@@ -2035,6 +2112,46 @@ bool FlowGraph::Canonicalize() {
   return changed;
 }
 
+void FlowGraph::PopulateWithICData(const Function& function) {
+  Zone* zone = Thread::Current()->zone();
+
+  for (BlockIterator block_it = reverse_postorder_iterator(); !block_it.Done();
+       block_it.Advance()) {
+    ForwardInstructionIterator it(block_it.Current());
+    for (; !it.Done(); it.Advance()) {
+      Instruction* instr = it.Current();
+      if (instr->IsInstanceCall()) {
+        InstanceCallInstr* call = instr->AsInstanceCall();
+        if (!call->HasICData()) {
+          const Array& arguments_descriptor =
+              Array::Handle(zone, call->GetArgumentsDescriptor());
+          const ICData& ic_data = ICData::ZoneHandle(
+              zone,
+              ICData::New(function, call->function_name(), arguments_descriptor,
+                          call->deopt_id(), call->checked_argument_count(),
+                          ICData::kInstance));
+          call->set_ic_data(&ic_data);
+        }
+      } else if (instr->IsStaticCall()) {
+        StaticCallInstr* call = instr->AsStaticCall();
+        if (!call->HasICData()) {
+          const Array& arguments_descriptor =
+              Array::Handle(zone, call->GetArgumentsDescriptor());
+          const Function& target = call->function();
+          int num_args_checked =
+              MethodRecognizer::NumArgsCheckedForStaticCall(target);
+          const ICData& ic_data = ICData::ZoneHandle(
+              zone, ICData::New(function, String::Handle(zone, target.name()),
+                                arguments_descriptor, call->deopt_id(),
+                                num_args_checked, ICData::kStatic));
+          ic_data.AddTarget(target);
+          call->set_ic_data(&ic_data);
+        }
+      }
+    }
+  }
+}
+
 // Optimize (a << b) & c pattern: if c is a positive Smi or zero, then the
 // shift can be a truncating Smi shift-left and result is always Smi.
 // Merging occurs only per basic-block.
@@ -2181,7 +2298,7 @@ void FlowGraph::OptimizeLeftShiftBitAndSmiOp(
     // Replace Mint op with Smi op.
     BinarySmiOpInstr* smi_op = new (Z) BinarySmiOpInstr(
         Token::kBIT_AND, new (Z) Value(left_instr), new (Z) Value(right_instr),
-        Thread::kNoDeoptId);  // BIT_AND cannot deoptimize.
+        DeoptId::kNone);  // BIT_AND cannot deoptimize.
     bit_and_instr->ReplaceWith(smi_op, current_iterator);
   }
 }
@@ -2273,7 +2390,7 @@ void FlowGraph::AppendExtractNthOutputForMerged(Definition* instr,
 static TargetEntryInstr* NewTarget(FlowGraph* graph, Instruction* inherit) {
   TargetEntryInstr* target = new (graph->zone())
       TargetEntryInstr(graph->allocate_block_id(),
-                       inherit->GetBlock()->try_index(), Thread::kNoDeoptId);
+                       inherit->GetBlock()->try_index(), DeoptId::kNone);
   target->InheritDeoptTarget(graph->zone(), inherit);
   return target;
 }
@@ -2281,7 +2398,7 @@ static TargetEntryInstr* NewTarget(FlowGraph* graph, Instruction* inherit) {
 static JoinEntryInstr* NewJoin(FlowGraph* graph, Instruction* inherit) {
   JoinEntryInstr* join = new (graph->zone())
       JoinEntryInstr(graph->allocate_block_id(),
-                     inherit->GetBlock()->try_index(), Thread::kNoDeoptId);
+                     inherit->GetBlock()->try_index(), DeoptId::kNone);
   join->InheritDeoptTarget(graph->zone(), inherit);
   return join;
 }
@@ -2289,7 +2406,7 @@ static JoinEntryInstr* NewJoin(FlowGraph* graph, Instruction* inherit) {
 static GotoInstr* NewGoto(FlowGraph* graph,
                           JoinEntryInstr* target,
                           Instruction* inherit) {
-  GotoInstr* got = new (graph->zone()) GotoInstr(target, Thread::kNoDeoptId);
+  GotoInstr* got = new (graph->zone()) GotoInstr(target, DeoptId::kNone);
   got->InheritDeoptTarget(graph->zone(), inherit);
   return got;
 }
@@ -2297,7 +2414,7 @@ static GotoInstr* NewGoto(FlowGraph* graph,
 static BranchInstr* NewBranch(FlowGraph* graph,
                               ComparisonInstr* cmp,
                               Instruction* inherit) {
-  BranchInstr* bra = new (graph->zone()) BranchInstr(cmp, Thread::kNoDeoptId);
+  BranchInstr* bra = new (graph->zone()) BranchInstr(cmp, DeoptId::kNone);
   bra->InheritDeoptTarget(graph->zone(), inherit);
   return bra;
 }
@@ -2379,7 +2496,7 @@ JoinEntryInstr* FlowGraph::NewDiamond(Instruction* instruction,
   StrictCompareInstr* circuit = new (zone()) StrictCompareInstr(
       inherit->token_pos(), Token::kEQ_STRICT, new (zone()) Value(phi),
       new (zone()) Value(GetConstant(Bool::True())), false,
-      Thread::kNoDeoptId);  // don't inherit
+      DeoptId::kNone);  // don't inherit
 
   // Return new blocks through the second diamond.
   return NewDiamond(mid_point, inherit, circuit, b_true, b_false);

@@ -12,6 +12,7 @@ import 'package:kernel/ast.dart'
         Class,
         ConstructorInvocation,
         DartType,
+        DynamicType,
         Expression,
         Field,
         Library,
@@ -25,7 +26,10 @@ import 'package:kernel/ast.dart'
         StringLiteral,
         TreeNode,
         Typedef,
+        VariableDeclaration,
         VoidType;
+
+import 'package:kernel/clone.dart' show CloneVisitor;
 
 import '../../scanner/token.dart' show Token;
 
@@ -36,6 +40,7 @@ import '../fasta_codes.dart'
         LocatedMessage,
         Message,
         messageConflictsWithTypeVariableCause,
+        messageGenericFunctionTypeInBound,
         messageTypeVariableDuplicatedName,
         messageTypeVariableSameNameAsEnclosing,
         noLength,
@@ -57,9 +62,13 @@ import '../import.dart' show Import;
 import '../loader.dart' show Loader;
 
 import '../modifier.dart'
-    show abstractMask, namedMixinApplicationMask, staticMask;
+    show
+        abstractMask,
+        mixinDeclarationMask,
+        namedMixinApplicationMask,
+        staticMask;
 
-import '../problems.dart' show unhandled;
+import '../problems.dart' show unexpected, unhandled;
 
 import '../source/source_class_builder.dart' show SourceClassBuilder;
 
@@ -112,6 +121,7 @@ import 'metadata_collector.dart';
 import 'type_algorithms.dart'
     show
         calculateBounds,
+        findGenericFunctionTypes,
         getNonSimplicityIssuesForDeclaration,
         getNonSimplicityIssuesForTypeVariables;
 
@@ -125,6 +135,12 @@ class KernelLibraryBuilder
 
   final List<KernelTypeVariableBuilder> boundlessTypeVariables =
       <KernelTypeVariableBuilder>[];
+
+  // A list of alternating forwarders and the procedures they were generated
+  // for.  Note that it may not include a forwarder-origin pair in cases when
+  // the former does not need to be updated after the body of the latter was
+  // built.
+  final List<Procedure> forwardersOrigins = <Procedure>[];
 
   /// Exports that can't be serialized.
   ///
@@ -151,14 +167,12 @@ class KernelLibraryBuilder
 
   Uri get uri => library.importUri;
 
-  void becomeCoreLibrary(dynamicType) {
-    if (scope.local["dynamic"] == null) {
-      addBuilder(
-          "dynamic",
-          new DynamicTypeBuilder<KernelTypeBuilder, DartType>(
-              dynamicType, this, -1),
-          -1);
-    }
+  void addSyntheticDeclarationOfDynamic() {
+    addBuilder(
+        "dynamic",
+        new DynamicTypeBuilder<KernelTypeBuilder, DartType>(
+            const DynamicType(), this, -1),
+        -1);
   }
 
   KernelTypeBuilder addNamedType(
@@ -206,6 +220,11 @@ class KernelLibraryBuilder
     // library scope.
     Scope constructorScope = new Scope(constructors, null, null, "constructors",
         isModifiable: false);
+    bool isMixinDeclaration = false;
+    if (modifiers & mixinDeclarationMask != 0) {
+      isMixinDeclaration = true;
+      modifiers = (modifiers & ~mixinDeclarationMask) | abstractMask;
+    }
     ClassBuilder cls = new SourceClassBuilder(
         metadata,
         modifiers,
@@ -220,7 +239,8 @@ class KernelLibraryBuilder
         new List<ConstructorReferenceBuilder>.from(constructorReferences),
         startCharOffset,
         charOffset,
-        charEndOffset);
+        charEndOffset,
+        isMixinDeclaration: isMixinDeclaration);
     loader.target.metadataCollector
         ?.setDocumentationComment(cls.target, documentationComment);
 
@@ -238,10 +258,8 @@ class KernelLibraryBuilder
       if (typeVariablesByName != null) {
         TypeVariableBuilder tv = typeVariablesByName[name];
         if (tv != null) {
-          cls.addCompileTimeError(
-              templateConflictsWithTypeVariable.withArguments(name),
-              member.charOffset,
-              name.length,
+          cls.addProblem(templateConflictsWithTypeVariable.withArguments(name),
+              member.charOffset, name.length,
               context: [
                 messageConflictsWithTypeVariableCause.withLocation(
                     tv.fileUri, tv.charOffset, name.length)
@@ -253,9 +271,7 @@ class KernelLibraryBuilder
 
     members.forEach(setParentAndCheckConflicts);
     constructors.forEach(setParentAndCheckConflicts);
-    // Formally, a setter has the name `id=`, so it can never conflict with a
-    // type variable.
-    setters.forEach(setParent);
+    setters.forEach(setParentAndCheckConflicts);
     addBuilder(className, cls, charOffset);
   }
 
@@ -267,7 +283,7 @@ class KernelLibraryBuilder
     for (TypeVariableBuilder tv in typeVariables) {
       TypeVariableBuilder existing = typeVariablesByName[tv.name];
       if (existing != null) {
-        addCompileTimeError(messageTypeVariableDuplicatedName, tv.charOffset,
+        addProblem(messageTypeVariableDuplicatedName, tv.charOffset,
             tv.name.length, fileUri,
             context: [
               templateTypeVariableDuplicatedNameCause
@@ -281,8 +297,8 @@ class KernelLibraryBuilder
           // Only classes and type variables can't have the same name. See
           // [#29555](https://github.com/dart-lang/sdk/issues/29555).
           if (tv.name == owner.name) {
-            addCompileTimeError(messageTypeVariableSameNameAsEnclosing,
-                tv.charOffset, tv.name.length, fileUri);
+            addProblem(messageTypeVariableSameNameAsEnclosing, tv.charOffset,
+                tv.name.length, fileUri);
           }
         }
       }
@@ -312,14 +328,6 @@ class KernelLibraryBuilder
       }
     }
     if (type is KernelMixinApplicationBuilder) {
-      String extractName(name) {
-        if (name is QualifiedName) {
-          return name.suffix;
-        } else {
-          return name;
-        }
-      }
-
       // Documentation below assumes the given mixin application is in one of
       // these forms:
       //
@@ -336,7 +344,7 @@ class KernelLibraryBuilder
       /// 1. `S with M1`.
       /// 2. `(S with M1) with M2`.
       /// 3. `((S with M1) with M2) with M3`.
-      KernelTypeBuilder supertype = type.supertype;
+      KernelTypeBuilder supertype = type.supertype ?? loader.target.objectType;
 
       /// The variable part of the mixin application's synthetic name. It
       /// starts out as the name of the superclass, but is only used after it
@@ -472,8 +480,7 @@ class KernelLibraryBuilder
             startCharOffset,
             charOffset,
             TreeNode.noOffset,
-            null,
-            mixin);
+            mixedInType: mixin);
         if (isNamedMixinApplication) {
           loader.target.metadataCollector?.setDocumentationComment(
               application.target, documentationComment);
@@ -806,10 +813,10 @@ class KernelLibraryBuilder
     }
   }
 
-  void addNativeDependency(Uri nativeImportUri) {
+  void addNativeDependency(String nativeImportPath) {
     Declaration constructor = loader.getNativeAnnotation();
     Arguments arguments =
-        new Arguments(<Expression>[new StringLiteral("$nativeImportUri")]);
+        new Arguments(<Expression>[new StringLiteral(nativeImportPath)]);
     Expression annotation;
     if (constructor.isConstructor) {
       annotation = new ConstructorInvocation(constructor.target, arguments)
@@ -839,8 +846,8 @@ class KernelLibraryBuilder
         Import import = imports[importIndex++];
 
         // Rather than add a LibraryDependency, we attach an annotation.
-        if (import.nativeImportUri != null) {
-          addNativeDependency(import.nativeImportUri);
+        if (import.nativeImportPath != null) {
+          addNativeDependency(import.nativeImportPath);
           continue;
         }
 
@@ -987,8 +994,16 @@ class KernelLibraryBuilder
     var builderTemplate = isExport
         ? templateDuplicatedExportInType
         : templateDuplicatedImportInType;
-    return new KernelInvalidTypeBuilder(name, charOffset, fileUri,
-        builderTemplate.withArguments(name, uri, otherUri));
+    return new KernelInvalidTypeBuilder(
+        name,
+        builderTemplate
+            .withArguments(
+                name,
+                // TODO(ahe): We should probably use a context object here
+                // instead of including URIs in this message.
+                uri,
+                otherUri)
+            .withLocation(fileUri, charOffset, name.length));
   }
 
   int finishDeferredLoadTearoffs() {
@@ -1001,6 +1016,55 @@ class KernelLibraryBuilder
       }
     }
     return total;
+  }
+
+  int finishForwarders() {
+    int count = 0;
+    CloneVisitor cloner = new CloneVisitor();
+    for (int i = 0; i < forwardersOrigins.length; i += 2) {
+      Procedure forwarder = forwardersOrigins[i];
+      Procedure origin = forwardersOrigins[i + 1];
+
+      int positionalCount = origin.function.positionalParameters.length;
+      if (forwarder.function.positionalParameters.length != positionalCount) {
+        return unexpected(
+            "$positionalCount",
+            "${forwarder.function.positionalParameters.length}",
+            origin.fileOffset,
+            origin.fileUri);
+      }
+      for (int j = 0; j < positionalCount; ++j) {
+        VariableDeclaration forwarderParameter =
+            forwarder.function.positionalParameters[j];
+        VariableDeclaration originParameter =
+            origin.function.positionalParameters[j];
+        if (originParameter.initializer != null) {
+          forwarderParameter.initializer =
+              cloner.clone(originParameter.initializer);
+          forwarderParameter.initializer.parent = forwarderParameter;
+        }
+      }
+
+      Map<String, VariableDeclaration> originNamedMap =
+          <String, VariableDeclaration>{};
+      for (VariableDeclaration originNamed in origin.function.namedParameters) {
+        originNamedMap[originNamed.name] = originNamed;
+      }
+      for (VariableDeclaration forwarderNamed
+          in forwarder.function.namedParameters) {
+        VariableDeclaration originNamed = originNamedMap[forwarderNamed.name];
+        if (originNamed == null) {
+          return unhandled(
+              "null", forwarder.name.name, origin.fileOffset, origin.fileUri);
+        }
+        forwarderNamed.initializer = cloner.clone(originNamed.initializer);
+        forwarderNamed.initializer.parent = forwarderNamed;
+      }
+
+      ++count;
+    }
+    forwardersOrigins.clear();
+    return count;
   }
 
   void addNativeMethod(KernelFunctionBuilder method) {
@@ -1049,13 +1113,30 @@ class KernelLibraryBuilder
         bool strongMode) {
       if (variables == null) return 0;
 
+      bool haveErroneousBounds = false;
       if (strongMode) {
-        List<KernelTypeBuilder> calculatedBounds =
-            calculateBounds(variables, dynamicType, bottomType, objectClass);
         for (int i = 0; i < variables.length; ++i) {
-          variables[i].defaultType = calculatedBounds[i];
+          TypeVariableBuilder<TypeBuilder, Object> variable = variables[i];
+          List<TypeBuilder> genericFunctionTypes = <TypeBuilder>[];
+          findGenericFunctionTypes(variable.bound,
+              result: genericFunctionTypes);
+          if (genericFunctionTypes.length > 0) {
+            haveErroneousBounds = true;
+            addProblem(messageGenericFunctionTypeInBound, variable.charOffset,
+                variable.name.length, variable.fileUri);
+          }
         }
-      } else {
+
+        if (!haveErroneousBounds) {
+          List<KernelTypeBuilder> calculatedBounds =
+              calculateBounds(variables, dynamicType, bottomType, objectClass);
+          for (int i = 0; i < variables.length; ++i) {
+            variables[i].defaultType = calculatedBounds[i];
+          }
+        }
+      }
+
+      if (!strongMode || haveErroneousBounds) {
         // In Dart 1, put `dynamic` everywhere.
         for (int i = 0; i < variables.length; ++i) {
           variables[i].defaultType = dynamicType;
@@ -1082,7 +1163,8 @@ class KernelLibraryBuilder
       if (declaration is KernelClassBuilder) {
         {
           List<Object> issues = strongMode
-              ? getNonSimplicityIssuesForDeclaration(declaration)
+              ? getNonSimplicityIssuesForDeclaration(declaration,
+                  performErrorRecovery: true)
               : const <Object>[];
           reportIssues(issues);
           // In case of issues, use non-strong mode for error recovery.
@@ -1102,7 +1184,8 @@ class KernelLibraryBuilder
         });
       } else if (declaration is KernelFunctionTypeAliasBuilder) {
         List<Object> issues = strongMode
-            ? getNonSimplicityIssuesForDeclaration(declaration)
+            ? getNonSimplicityIssuesForDeclaration(declaration,
+                performErrorRecovery: true)
             : const <Object>[];
         reportIssues(issues);
         // In case of issues, use non-strong mode for error recovery.
@@ -1123,8 +1206,8 @@ class KernelLibraryBuilder
   }
 
   @override
-  void includePart(covariant KernelLibraryBuilder part) {
-    super.includePart(part);
+  void includePart(covariant KernelLibraryBuilder part, Set<Uri> usedParts) {
+    super.includePart(part, usedParts);
     nativeMethods.addAll(part.nativeMethods);
     boundlessTypeVariables.addAll(part.boundlessTypeVariables);
   }
@@ -1209,7 +1292,7 @@ class KernelLibraryBuilder
 
   void exportMemberFromPatch(String name, Declaration member) {
     if (uri.scheme != "dart" || !uri.path.startsWith("_")) {
-      addCompileTimeError(templatePatchInjectionFailed.withArguments(name, uri),
+      addProblem(templatePatchInjectionFailed.withArguments(name, uri),
           member.charOffset, noLength, member.fileUri);
     }
     // Platform-private libraries, such as "dart:_internal" have special
@@ -1233,3 +1316,5 @@ Uri computeLibraryUri(Declaration declaration) {
   return unhandled("no library parent", "${declaration.runtimeType}",
       declaration.charOffset, declaration.fileUri);
 }
+
+String extractName(name) => name is QualifiedName ? name.name : name;

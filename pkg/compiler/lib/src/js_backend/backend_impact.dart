@@ -448,7 +448,6 @@ class BackendImpacts {
     return _typeVariableExpression ??= new BackendImpact(staticUses: [
       _commonElements.setRuntimeTypeInfo,
       _commonElements.getRuntimeTypeInfo,
-      _commonElements.runtimeTypeToString,
       _commonElements.createRuntimeType
     ], otherImpacts: [
       listValues,
@@ -461,13 +460,6 @@ class BackendImpacts {
 
   BackendImpact get typeCheck {
     return _typeCheck ??= new BackendImpact(otherImpacts: [boolValues]);
-  }
-
-  BackendImpact _checkedModeTypeCheck;
-
-  BackendImpact get checkedModeTypeCheck {
-    return _checkedModeTypeCheck ??=
-        new BackendImpact(staticUses: [_commonElements.throwRuntimeError]);
   }
 
   BackendImpact _malformedTypeCheck;
@@ -498,25 +490,11 @@ class BackendImpacts {
     return _genericIsCheck ??= new BackendImpact(otherImpacts: [intValues]);
   }
 
-  BackendImpact _genericCheckedModeTypeCheck;
-
-  BackendImpact get genericCheckedModeTypeCheck {
-    return _genericCheckedModeTypeCheck ??=
-        new BackendImpact(staticUses: [_commonElements.assertSubtype]);
-  }
-
   BackendImpact _typeVariableTypeCheck;
 
   BackendImpact get typeVariableTypeCheck {
     return _typeVariableTypeCheck ??= new BackendImpact(
         staticUses: [_commonElements.checkSubtypeOfRuntimeType]);
-  }
-
-  BackendImpact _typeVariableCheckedModeTypeCheck;
-
-  BackendImpact get typeVariableCheckedModeTypeCheck {
-    return _typeVariableCheckedModeTypeCheck ??= new BackendImpact(
-        staticUses: [_commonElements.assertSubtypeOfRuntimeType]);
   }
 
   BackendImpact _functionTypeCheck;
@@ -669,17 +647,6 @@ class BackendImpacts {
         globalUses: [_commonElements.isJsIndexable]);
   }
 
-  BackendImpact _enableTypeAssertions;
-
-  BackendImpact get enableTypeAssertions {
-    return _enableTypeAssertions ??= new BackendImpact(
-        // Register the helper that checks if the expression in an if/while/for
-        // is a boolean.
-        // TODO(johnniwinther): Should this be registered through a [Feature]
-        // instead?
-        globalUses: [_commonElements.boolConversionCheck]);
-  }
-
   BackendImpact _traceHelper;
 
   BackendImpact get traceHelper {
@@ -769,18 +736,15 @@ class BackendImpacts {
     ]);
   }
 
-  BackendImpact _genericInstantiation;
+  Map<int, BackendImpact> _genericInstantiation = <int, BackendImpact>{};
 
-  BackendImpact get genericInstantiation =>
-      _genericInstantiation ??= new BackendImpact(staticUses: [
-        _commonElements.instantiate1,
-        _commonElements.instantiate2,
-        _commonElements.instantiate3,
+  BackendImpact getGenericInstantiation(int typeArgumentCount) =>
+      _genericInstantiation[typeArgumentCount] ??=
+          new BackendImpact(staticUses: [
+        _commonElements.getInstantiateFunction(typeArgumentCount),
         _commonElements.instantiatedGenericFunctionType,
         _commonElements.extractFunctionTypeObjectFromInternal,
       ], instantiatedClasses: [
-        _commonElements.instantiation1Class,
-        _commonElements.instantiation2Class,
-        _commonElements.instantiation3Class,
+        _commonElements.getInstantiationClass(typeArgumentCount),
       ]);
 }

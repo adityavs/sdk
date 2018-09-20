@@ -46,13 +46,31 @@ abstract class SecureSocket implements Socket {
       bool onBadCertificate(X509Certificate certificate),
       List<String> supportedProtocols,
       Duration timeout}) {
-    return RawSecureSocket
-        .connect(host, port,
+    return RawSecureSocket.connect(host, port,
             context: context,
             onBadCertificate: onBadCertificate,
             supportedProtocols: supportedProtocols,
             timeout: timeout)
         .then((rawSocket) => new SecureSocket._(rawSocket));
+  }
+
+  /// Like [connect], but returns a [Future] that completes with a
+  /// [ConnectionTask] that can be cancelled if the [SecureSocket] is no
+  /// longer needed.
+  static Future<ConnectionTask<SecureSocket>> startConnect(host, int port,
+      {SecurityContext context,
+      bool onBadCertificate(X509Certificate certificate),
+      List<String> supportedProtocols}) {
+    return RawSecureSocket.startConnect(host, port,
+            context: context,
+            onBadCertificate: onBadCertificate,
+            supportedProtocols: supportedProtocols)
+        .then((rawState) {
+      Future<SecureSocket> socket =
+          rawState.socket.then((rawSocket) => new SecureSocket._(rawSocket));
+      return new ConnectionTask<SecureSocket>._(
+          socket: socket, onCancel: rawState._onCancel);
+    });
   }
 
   /**
@@ -215,6 +233,26 @@ abstract class RawSecureSocket implements RawSocket {
     });
   }
 
+  /// Like [connect], but returns a [Future] that completes with a
+  /// [ConnectionTask] that can be cancelled if the [RawSecureSocket] is no
+  /// longer needed.
+  static Future<ConnectionTask<RawSecureSocket>> startConnect(host, int port,
+      {SecurityContext context,
+      bool onBadCertificate(X509Certificate certificate),
+      List<String> supportedProtocols}) {
+    return RawSocket.startConnect(host, port)
+        .then((ConnectionTask<RawSocket> rawState) {
+      Future<RawSecureSocket> socket = rawState.socket.then((rawSocket) {
+        return secure(rawSocket,
+            context: context,
+            onBadCertificate: onBadCertificate,
+            supportedProtocols: supportedProtocols);
+      });
+      return new ConnectionTask<RawSecureSocket>._(
+          socket: socket, onCancel: rawState._onCancel);
+    });
+  }
+
   /**
    * Takes an already connected [socket] and starts client side TLS
    * handshake to make the communication secure. When the returned
@@ -340,6 +378,7 @@ abstract class RawSecureSocket implements RawSocket {
  * get the fields of the certificate.
  */
 abstract class X509Certificate {
+  @pragma("vm:entry-point")
   external factory X509Certificate._();
 
   /// The DER encoded bytes of the certificate.
@@ -990,8 +1029,7 @@ class _RawSecureSocket extends Stream<RawSocketEvent>
       args[2 * i + 3] = bufs[i].end;
     }
 
-    return _IOService
-        ._dispatch(_IOService.sslProcessFilter, args)
+    return _IOService._dispatch(_IOService.sslProcessFilter, args)
         .then((response) {
       if (response.length == 2) {
         if (wasInHandshake) {
@@ -1070,9 +1108,15 @@ class _RawSecureSocket extends Stream<RawSocketEvent>
  */
 class _ExternalBuffer {
   // This will be an ExternalByteArray, backed by C allocated data.
+  @pragma("vm:entry-point", "set")
   List<int> data;
+
+  @pragma("vm:entry-point")
   int start;
+
+  @pragma("vm:entry-point")
   int end;
+
   final size;
 
   _ExternalBuffer(this.size) {
@@ -1219,6 +1263,7 @@ class TlsException implements IOException {
   final String message;
   final OSError osError;
 
+  @pragma("vm:entry-point")
   const TlsException([String message = "", OSError osError = null])
       : this._("TlsException", message, osError);
 
@@ -1244,6 +1289,7 @@ class TlsException implements IOException {
  * a secure network connection.
  */
 class HandshakeException extends TlsException {
+  @pragma("vm:entry-point")
   const HandshakeException([String message = "", OSError osError = null])
       : super._("HandshakeException", message, osError);
 }
@@ -1254,6 +1300,7 @@ class HandshakeException extends TlsException {
  * certificate.
  */
 class CertificateException extends TlsException {
+  @pragma("vm:entry-point")
   const CertificateException([String message = "", OSError osError = null])
       : super._("CertificateException", message, osError);
 }

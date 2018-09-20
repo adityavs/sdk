@@ -28,9 +28,11 @@ import 'package:kernel/kernel.dart'
 import 'package:kernel/target/targets.dart';
 import 'package:path/path.dart' as path;
 import 'package:usage/uuid/uuid.dart';
+
 import 'package:vm/incremental_compiler.dart' show IncrementalCompiler;
 import 'package:vm/kernel_front_end.dart'
     show compileToKernel, parseCommandLineDefines;
+import 'package:vm/target/install.dart' show installAdditionalTargets;
 
 ArgParser argParser = new ArgParser(allowTrailingOptions: true)
   ..addFlag('train',
@@ -96,7 +98,12 @@ ArgParser argParser = new ArgParser(allowTrailingOptions: true)
       hide: true)
   ..addMultiOption('define',
       abbr: 'D',
-      help: 'The values for the environment constants (e.g. -Dkey=value).');
+      help: 'The values for the environment constants (e.g. -Dkey=value).')
+  ..addFlag('embed-source-text',
+      help: 'Includes sources into generated dill file. Having sources'
+          ' allows to effectively use observatory to debug produced'
+          ' application, produces better stack traces on exceptions.',
+      defaultsTo: true);
 
 String usage = '''
 Usage: server [options] [input.dart]
@@ -156,6 +163,10 @@ abstract class CompilerInterface {
   /// Accept results of previous compilation so that next recompilation cycle
   /// won't recompile sources that were previously reported as changed.
   void acceptLastDelta();
+
+  /// Rejects results of previous compilation and sets compiler back to last
+  /// accepted state.
+  Future<void> rejectLastDelta();
 
   /// This let's compiler know that source file identifed by `uri` was changed.
   void invalidate(Uri uri);
@@ -254,6 +265,7 @@ class FrontendCompiler implements CompilerInterface {
       ..strongMode = options['strong']
       ..sdkSummary = sdkRoot.resolve(platformKernelDill)
       ..verbose = options['verbose']
+      ..embedSourceText = options['embed-source-text']
       ..onProblem =
           (message, Severity severity, List<FormattedMessage> context) {
         bool printMessage;
@@ -300,9 +312,16 @@ class FrontendCompiler implements CompilerInterface {
       return false;
     }
 
+    // Ensure that Flutter and VM targets are added to targets dictionary.
+    installAdditionalTargets();
+
     final TargetFlags targetFlags = new TargetFlags(
         strongMode: options['strong'], syncAsync: options['sync-async']);
     compilerOptions.target = getTarget(options['target'], targetFlags);
+    if (compilerOptions.target == null) {
+      print('Failed to create front-end target ${options['target']}.');
+      return false;
+    }
 
     final String importDill = options['import-dill'];
     if (importDill != null) {
@@ -362,6 +381,17 @@ class FrontendCompiler implements CompilerInterface {
             sink, (lib) => !lib.isExternal, true /* excludeUriToSource */)
         : printerFactory.newBinaryPrinter(sink);
 
+    component.libraries.sort((Library l1, Library l2) {
+      return "${l1.fileUri}".compareTo("${l2.fileUri}");
+    });
+
+    component.computeCanonicalNames();
+    for (Library library in component.libraries) {
+      library.additionalExports.sort((Reference r1, Reference r2) {
+        return "${r1.canonicalName}".compareTo("${r2.canonicalName}");
+      });
+    }
+
     printer.writeComponentFile(component);
     await sink.close();
   }
@@ -390,8 +420,13 @@ class FrontendCompiler implements CompilerInterface {
       if (uri == null || '$uri' == '') continue nextUri;
 
       final List<int> oldBytes = component.uriToSource[uri].source;
-      final FileSystemEntity entity =
-          _compilerOptions.fileSystem.entityForUri(uri);
+      FileSystemEntity entity;
+      try {
+        entity = _compilerOptions.fileSystem.entityForUri(uri);
+      } catch (_) {
+        // Ignore errors that might be caused by non-file uris.
+        continue nextUri;
+      }
       if (!await entity.exists()) {
         _generator.invalidate(uri);
         continue nextUri;
@@ -425,11 +460,7 @@ class FrontendCompiler implements CompilerInterface {
     if (deltaProgram != null && transformer != null) {
       transformer.transform(deltaProgram);
     }
-
-    final IOSink sink = new File(_kernelBinaryFilename).openWrite();
-    final BinaryPrinter printer = printerFactory.newBinaryPrinter(sink);
-    printer.writeComponentFile(deltaProgram);
-    await sink.close();
+    await writeDillFile(deltaProgram, _kernelBinaryFilename);
     _outputStream
         .writeln('$boundaryKey $_kernelBinaryFilename ${errors.length}');
     _kernelBinaryFilename = _kernelBinaryFilenameIncremental;
@@ -470,6 +501,14 @@ class FrontendCompiler implements CompilerInterface {
   @override
   void acceptLastDelta() {
     _generator.accept();
+  }
+
+  @override
+  Future<void> rejectLastDelta() async {
+    await _generator.reject();
+    final String boundaryKey = new Uuid().generateV4();
+    _outputStream.writeln('result $boundaryKey');
+    _outputStream.writeln(boundaryKey);
   }
 
   @override
@@ -527,7 +566,7 @@ String _escapePath(String path) {
 }
 
 // https://ninja-build.org/manual.html#_depfile
-void _writeDepfile(Component component, String output, String depfile) async {
+_writeDepfile(Component component, String output, String depfile) async {
   final IOSink file = new File(depfile).openWrite();
   file.write(_escapePath(output));
   file.write(':');
@@ -554,7 +593,7 @@ class _CompileExpressionRequest {
 /// Listens for the compilation commands on [input] stream.
 /// This supports "interactive" recompilation mode of execution.
 void listenAndCompile(CompilerInterface compiler, Stream<List<int>> input,
-    ArgResults options, void quit(),
+    ArgResults options, Completer<int> completer,
     {IncrementalCompiler generator}) {
   _State state = _State.READY_FOR_INSTRUCTION;
   _CompileExpressionRequest compileExpressionRequest;
@@ -605,10 +644,12 @@ void listenAndCompile(CompilerInterface compiler, Stream<List<int>> input,
           state = _State.COMPILE_EXPRESSION_EXPRESSION;
         } else if (string == 'accept') {
           compiler.acceptLastDelta();
+        } else if (string == 'reject') {
+          await compiler.rejectLastDelta();
         } else if (string == 'reset') {
           compiler.resetIncrementalCompiler();
         } else if (string == 'quit') {
-          quit();
+          completer.complete(0);
         }
         break;
       case _State.RECOMPILE_LIST:
@@ -668,7 +709,7 @@ void listenAndCompile(CompilerInterface compiler, Stream<List<int>> input,
 /// processes user input.
 /// `compiler` is an optional parameter so it can be replaced with mocked
 /// version for testing.
-Future<void> starter(
+Future<int> starter(
   List<String> args, {
   CompilerInterface compiler,
   Stream<List<int>> input,
@@ -682,7 +723,7 @@ Future<void> starter(
   } catch (error) {
     print('ERROR: $error\n');
     print(usage);
-    exit(1);
+    return 1;
   }
 
   if (options['train']) {
@@ -714,7 +755,7 @@ Future<void> starter(
       compiler.acceptLastDelta();
       await compiler.recompileDelta();
       compiler.acceptLastDelta();
-      return;
+      return 0;
     } finally {
       temp.deleteSync(recursive: true);
     }
@@ -726,12 +767,14 @@ Future<void> starter(
   );
 
   if (options.rest.isNotEmpty) {
-    exit(await compiler.compile(options.rest[0], options, generator: generator)
+    return await compiler.compile(options.rest[0], options,
+            generator: generator)
         ? 0
-        : 254);
+        : 254;
   }
 
-  listenAndCompile(compiler, input ?? stdin, options, () {
-    exit(0);
-  }, generator: generator);
+  Completer<int> completer = new Completer<int>();
+  listenAndCompile(compiler, input ?? stdin, options, completer,
+      generator: generator);
+  return completer.future;
 }

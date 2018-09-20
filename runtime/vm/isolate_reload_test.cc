@@ -309,7 +309,7 @@ TEST_CASE(IsolateReload_BadClass) {
 
   Dart_Handle result = TestCase::ReloadTestScript(kReloadScript);
   if (TestCase::UsingDartFrontend()) {
-    EXPECT_ERROR(result, "Expected ';' before this");
+    EXPECT_ERROR(result, "Expected ';' after this");
   } else {
     EXPECT_ERROR(result, "unexpected token");
   }
@@ -1633,7 +1633,7 @@ TEST_CASE(IsolateReload_TearOff_Parameter_Count_Mismatch) {
         "Tried calling: C.foo()\n"
         "Found: C.foo(dynamic) => dynamic\n"
         "#0      Object.noSuchMethod "
-        "(dart:core/runtime/libobject_patch.dart:46:5)\n"
+        "(dart:core/runtime/libobject_patch.dart:50:5)\n"
         "#1      main (file:///test-lib:8:12)";
   } else {
     error =
@@ -1643,7 +1643,7 @@ TEST_CASE(IsolateReload_TearOff_Parameter_Count_Mismatch) {
         "Tried calling: C.foo()\n"
         "Found: C.foo(dynamic) => dynamic\n"
         "#0      Object.noSuchMethod "
-        "(dart:core-patch/dart:core/object_patch.dart:46)\n"
+        "(dart:core-patch/dart:core/object_patch.dart:50)\n"
         "#1      main (test-lib:8:12)";
   }
   EXPECT_ERROR(error_handle, error);
@@ -2301,7 +2301,7 @@ TEST_CASE(IsolateReload_EnumValuesToString) {
                SimpleInvokeStr(lib, "main"));
 }
 
-TEST_CASE(IsolateReload_DirectSubclasses_Success) {
+ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_Success) {
   Object& new_subclass = Object::Handle();
   String& name = String::Handle();
 
@@ -2312,7 +2312,7 @@ TEST_CASE(IsolateReload_DirectSubclasses_Success) {
   const Class& iterator_cls = Class::Handle(core_lib.LookupClass(name));
 
   // Keep track of how many subclasses an Iterator has.
-  const GrowableObjectArray& subclasses =
+  auto& subclasses =
       GrowableObjectArray::Handle(iterator_cls.direct_subclasses());
   intptr_t saved_subclass_count = subclasses.Length();
 
@@ -2323,11 +2323,15 @@ TEST_CASE(IsolateReload_DirectSubclasses_Success) {
       "  return 1;\n"
       "}\n";
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
-  EXPECT_VALID(lib);
-  EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+    EXPECT_VALID(lib);
+    EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  }
 
   // Iterator has one non-core subclass.
+  subclasses = iterator_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
   // The new subclass is named AIterator.
@@ -2344,11 +2348,15 @@ TEST_CASE(IsolateReload_DirectSubclasses_Success) {
       "  return 2;\n"
       "}\n";
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
-  EXPECT_VALID(lib);
-  EXPECT_EQ(2, SimpleInvoke(lib, "main"));
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::ReloadTestScript(kReloadScript);
+    EXPECT_VALID(lib);
+    EXPECT_EQ(2, SimpleInvoke(lib, "main"));
+  }
 
   // Iterator still has only one non-core subclass (AIterator is gone).
+  subclasses = iterator_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
   // The new subclass is named BIterator.
@@ -2357,7 +2365,7 @@ TEST_CASE(IsolateReload_DirectSubclasses_Success) {
   EXPECT_STREQ("BIterator", name.ToCString());
 }
 
-TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
+ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
   Object& new_subclass = Object::Handle();
   String& name = String::Handle();
 
@@ -2368,7 +2376,7 @@ TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
   const Class& iterator_cls = Class::Handle(core_lib.LookupClass(name));
 
   // Keep track of how many subclasses an Iterator has.
-  const GrowableObjectArray& subclasses =
+  auto& subclasses =
       GrowableObjectArray::Handle(iterator_cls.direct_subclasses());
   intptr_t saved_subclass_count = subclasses.Length();
 
@@ -2379,11 +2387,15 @@ TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
       "  return 1;\n"
       "}\n";
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
-  EXPECT_VALID(lib);
-  EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+    EXPECT_VALID(lib);
+    EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  }
 
   // Iterator has one new subclass.
+  subclasses = iterator_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
   // The new subclass is named AIterator.
@@ -2398,11 +2410,15 @@ TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
       "  return 2;\n"
       "}\n";
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
-  EXPECT_VALID(lib);
-  EXPECT_EQ(2, SimpleInvoke(lib, "main"));
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::ReloadTestScript(kReloadScript);
+    EXPECT_VALID(lib);
+    EXPECT_EQ(2, SimpleInvoke(lib, "main"));
+  }
 
   // Iterator has two non-core subclasses.
+  subclasses = iterator_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 2, subclasses.Length());
 
   // The non-core subclasses are AIterator and BIterator.
@@ -2416,7 +2432,7 @@ TEST_CASE(IsolateReload_DirectSubclasses_GhostSubclass) {
 }
 
 // Make sure that we restore the direct subclass info when we revert.
-TEST_CASE(IsolateReload_DirectSubclasses_Failure) {
+ISOLATE_UNIT_TEST_CASE(IsolateReload_DirectSubclasses_Failure) {
   Object& new_subclass = Object::Handle();
   String& name = String::Handle();
 
@@ -2427,7 +2443,7 @@ TEST_CASE(IsolateReload_DirectSubclasses_Failure) {
   const Class& iterator_cls = Class::Handle(core_lib.LookupClass(name));
 
   // Keep track of how many subclasses an Iterator has.
-  const GrowableObjectArray& subclasses =
+  auto& subclasses =
       GrowableObjectArray::Handle(iterator_cls.direct_subclasses());
   intptr_t saved_subclass_count = subclasses.Length();
 
@@ -2443,14 +2459,18 @@ TEST_CASE(IsolateReload_DirectSubclasses_Failure) {
       "  return 1;\n"
       "}\n";
 
-  Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
-  EXPECT_VALID(lib);
-  EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::LoadTestScript(kScript, NULL);
+    EXPECT_VALID(lib);
+    EXPECT_EQ(1, SimpleInvoke(lib, "main"));
+  }
 
   // Iterator has one non-core subclass...
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
   // ... and the non-core subclass is named AIterator.
+  subclasses = iterator_cls.direct_subclasses();
   new_subclass = subclasses.At(subclasses.Length() - 1);
   name = Class::Cast(new_subclass).Name();
   EXPECT_STREQ("AIterator", name.ToCString());
@@ -2468,16 +2488,20 @@ TEST_CASE(IsolateReload_DirectSubclasses_Failure) {
       "  return 2;\n"
       "}\n";
 
-  lib = TestCase::ReloadTestScript(kReloadScript);
-  if (TestCase::UsingDartFrontend()) {
-    EXPECT_ERROR(lib, "Expected ';' before this");
-  } else {
-    EXPECT_ERROR(lib, "unexpected token");
+  {
+    TransitionVMToNative transition(thread);
+    Dart_Handle lib = TestCase::ReloadTestScript(kReloadScript);
+    if (TestCase::UsingDartFrontend()) {
+      EXPECT_ERROR(lib, "Expected ';' after this");
+    } else {
+      EXPECT_ERROR(lib, "unexpected token");
+    }
   }
 
   // If we don't clean up the subclasses, we would find BIterator in
   // the list of subclasses, which would be bad.  Make sure that
   // Iterator still has only one non-core subclass...
+  subclasses = iterator_cls.direct_subclasses();
   EXPECT_EQ(saved_subclass_count + 1, subclasses.Length());
 
   // ...and the non-core subclass is still named AIterator.

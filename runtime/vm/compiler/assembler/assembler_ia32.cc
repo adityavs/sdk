@@ -1840,6 +1840,12 @@ void Assembler::StoreIntoObjectFilter(Register object,
                                       CanBeSmi can_be_smi,
                                       BarrierFilterMode how_to_jump) {
   if (can_be_smi == kValueIsNotSmi) {
+#if defined(DEBUG)
+    Label okay;
+    BranchIfNotSmi(value, &okay);
+    Stop("Unexpected Smi!");
+    Bind(&okay);
+#endif
     COMPILE_ASSERT((kNewObjectAlignmentOffset == kWordSize) &&
                    (kOldObjectAlignmentOffset == 0));
     // Write-barrier triggers if the value is in the new space (has bit set) and
@@ -1864,12 +1870,13 @@ void Assembler::StoreIntoObjectFilter(Register object,
   j(condition, label, distance);
 }
 
-// Destroys the value register.
 void Assembler::StoreIntoObject(Register object,
                                 const Address& dest,
                                 Register value,
                                 CanBeSmi can_be_smi) {
+  // x.slot = x. Barrier should have be removed at the IL level.
   ASSERT(object != value);
+
   movl(dest, value);
   Label done;
   StoreIntoObjectFilter(object, value, &done, can_be_smi, kJumpToNoUpdate);
@@ -1880,7 +1887,7 @@ void Assembler::StoreIntoObject(Register object,
   if (object != EDX) {
     movl(EDX, object);
   }
-  call(Address(THR, Thread::update_store_buffer_entry_point_offset()));
+  call(Address(THR, Thread::write_barrier_entry_point_offset()));
   if (value != EDX) {
     popl(EDX);  // Restore EDX.
   }
@@ -2227,6 +2234,7 @@ void Assembler::TryAllocate(const Class& cls,
     tags = RawObject::SizeTag::update(instance_size, tags);
     ASSERT(cls.id() != kIllegalCid);
     tags = RawObject::ClassIdTag::update(cls.id(), tags);
+    tags = RawObject::NewBit::update(true, tags);
     movl(FieldAddress(instance_reg, Object::tags_offset()), Immediate(tags));
   } else {
     jmp(failure);
@@ -2271,6 +2279,7 @@ void Assembler::TryAllocateArray(intptr_t cid,
     uint32_t tags = 0;
     tags = RawObject::ClassIdTag::update(cid, tags);
     tags = RawObject::SizeTag::update(instance_size, tags);
+    tags = RawObject::NewBit::update(true, tags);
     movl(FieldAddress(instance, Object::tags_offset()), Immediate(tags));
   } else {
     jmp(failure);
@@ -2512,12 +2521,13 @@ Address Assembler::ElementAddressForIntIndex(bool is_external,
                                              intptr_t cid,
                                              intptr_t index_scale,
                                              Register array,
-                                             intptr_t index) {
+                                             intptr_t index,
+                                             intptr_t extra_disp) {
   if (is_external) {
-    return Address(array, index * index_scale);
+    return Address(array, index * index_scale + extra_disp);
   } else {
     const int64_t disp = static_cast<int64_t>(index) * index_scale +
-                         Instance::DataOffsetFor(cid);
+                         Instance::DataOffsetFor(cid) + extra_disp;
     ASSERT(Utils::IsInt(32, disp));
     return FieldAddress(array, static_cast<int32_t>(disp));
   }
@@ -2549,12 +2559,13 @@ Address Assembler::ElementAddressForRegIndex(bool is_external,
                                              intptr_t cid,
                                              intptr_t index_scale,
                                              Register array,
-                                             Register index) {
+                                             Register index,
+                                             intptr_t extra_disp) {
   if (is_external) {
-    return Address(array, index, ToScaleFactor(index_scale), 0);
+    return Address(array, index, ToScaleFactor(index_scale), extra_disp);
   } else {
     return FieldAddress(array, index, ToScaleFactor(index_scale),
-                        Instance::DataOffsetFor(cid));
+                        Instance::DataOffsetFor(cid) + extra_disp);
   }
 }
 

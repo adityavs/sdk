@@ -5,7 +5,8 @@
 library js_backend.interceptor_data;
 
 import '../common/names.dart' show Identifiers;
-import '../common_elements.dart' show CommonElements, ElementEnvironment;
+import '../common_elements.dart'
+    show CommonElements, KCommonElements, KElementEnvironment;
 import '../elements/entities.dart';
 import '../elements/types.dart';
 import '../js/js.dart' as jsAst;
@@ -182,7 +183,8 @@ class InterceptorDataImpl implements InterceptorData {
     Iterable<ClassEntity> uses = closedWorld.mixinUsesOf(mixin);
     Set<ClassEntity> result = null;
     for (ClassEntity use in uses) {
-      closedWorld.forEachStrictSubclassOf(use, (ClassEntity subclass) {
+      closedWorld.classHierarchy.forEachStrictSubclassOf(use,
+          (ClassEntity subclass) {
         if (_nativeData.isNativeOrExtendsNative(subclass)) {
           if (result == null) result = new Set<ClassEntity>();
           result.add(subclass);
@@ -212,14 +214,14 @@ class InterceptorDataImpl implements InterceptorData {
     InterfaceType interfaceType = type;
     ClassEntity classElement = interfaceType.element;
     if (isInterceptedClass(classElement)) return false;
-    return closedWorld.hasOnlySubclasses(classElement);
+    return closedWorld.classHierarchy.hasOnlySubclasses(classElement);
   }
 }
 
 class InterceptorDataBuilderImpl implements InterceptorDataBuilder {
   final NativeBasicData _nativeData;
-  final ElementEnvironment _elementEnvironment;
-  final CommonElements _commonElements;
+  final KElementEnvironment _elementEnvironment;
+  final KCommonElements _commonElements;
 
   /// The members of instantiated interceptor classes: maps a member name to the
   /// list of members that have that name. This map is used by the codegen to

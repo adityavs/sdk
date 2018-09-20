@@ -27,8 +27,7 @@ void main() {
 @reflectiveTest
 class Dart2InferenceTest extends ResolverTestCase {
   @override
-  AnalysisOptions get defaultAnalysisOptions =>
-      new AnalysisOptionsImpl()..strongMode = true;
+  AnalysisOptions get defaultAnalysisOptions => new AnalysisOptionsImpl();
 
   @override
   bool get enableNewAnalysisDriver => true;
@@ -702,7 +701,7 @@ class C {
     var analysisResult = await computeAnalysisResult(source);
     var unit = analysisResult.unit;
 
-    ClassElement c = unit.element.getType('C');
+    ClassElement c = unit.declaredElement.getType('C');
 
     PropertyAccessorElement x = c.accessors[0];
     expect(x.returnType, VoidTypeImpl.instance);
@@ -726,7 +725,7 @@ class Derived extends Base {
     var analysisResult = await computeAnalysisResult(source);
     var unit = analysisResult.unit;
 
-    ClassElement c = unit.element.getType('Derived');
+    ClassElement c = unit.declaredElement.getType('Derived');
 
     PropertyAccessorElement x = c.accessors[0];
     expect(x.returnType, VoidTypeImpl.instance);
@@ -887,6 +886,12 @@ main() {
   }
 }
 
+@reflectiveTest
+class Dart2InferenceTest_Task extends Dart2InferenceTest {
+  @override
+  bool get enableNewAnalysisDriver => false;
+}
+
 class _TypeAnnotationsValidator extends RecursiveAstVisitor {
   final Map<int, String> types;
 
@@ -902,10 +907,4 @@ class _TypeAnnotationsValidator extends RecursiveAstVisitor {
       }
     }
   }
-}
-
-@reflectiveTest
-class Dart2InferenceTest_Task extends Dart2InferenceTest {
-  @override
-  bool get enableNewAnalysisDriver => false;
 }

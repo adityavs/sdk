@@ -304,6 +304,7 @@ var F = await;
     await assertNoFix(DartFixKind.ADD_ASYNC);
   }
 
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/33992')
   test_addAsync_blockFunctionBody() async {
     await resolveTestUnit('''
 foo() {}
@@ -364,6 +365,7 @@ void doStuff() => takeFutureCallback(() async => await 1);
 ''');
   }
 
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/33992')
   test_addAsync_expressionFunctionBody() async {
     errorFilter = (AnalysisError error) {
       return error.errorCode == StaticWarningCode.UNDEFINED_IDENTIFIER_AWAIT;
@@ -378,6 +380,7 @@ main() async => await foo();
 ''');
   }
 
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/33992')
   test_addAsync_returnFuture() async {
     errorFilter = (AnalysisError error) {
       return error.errorCode == StaticWarningCode.UNDEFINED_IDENTIFIER_AWAIT;
@@ -400,6 +403,7 @@ Future<int> main() async {
 ''');
   }
 
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/33992')
   test_addAsync_returnFuture_alreadyFuture() async {
     errorFilter = (AnalysisError error) {
       return error.errorCode == StaticWarningCode.UNDEFINED_IDENTIFIER_AWAIT;
@@ -422,6 +426,7 @@ Future<int> main() async {
 ''');
   }
 
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/33992')
   test_addAsync_returnFuture_dynamic() async {
     errorFilter = (AnalysisError error) {
       return error.errorCode == StaticWarningCode.UNDEFINED_IDENTIFIER_AWAIT;
@@ -442,6 +447,7 @@ dynamic main() async {
 ''');
   }
 
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/33992')
   test_addAsync_returnFuture_noType() async {
     errorFilter = (AnalysisError error) {
       return error.errorCode == StaticWarningCode.UNDEFINED_IDENTIFIER_AWAIT;
@@ -989,6 +995,44 @@ class Test {
   int b;
   final int c;
   Test(this.a, this.c);
+}
+''');
+  }
+
+  test_addMissingParameter_constructor_named_required_hasOne() async {
+    await resolveTestUnit('''
+class A {
+  A.named(int a) {}
+}
+main() {
+  new A.named(1, 2.0);
+}
+''');
+    await assertHasFix(DartFixKind.ADD_MISSING_PARAMETER_REQUIRED, '''
+class A {
+  A.named(int a, double d) {}
+}
+main() {
+  new A.named(1, 2.0);
+}
+''');
+  }
+
+  test_addMissingParameter_constructor_unnamed_required_hasOne() async {
+    await resolveTestUnit('''
+class A {
+  A(int a) {}
+}
+main() {
+  new A(1, 2.0);
+}
+''');
+    await assertHasFix(DartFixKind.ADD_MISSING_PARAMETER_REQUIRED, '''
+class A {
+  A(int a, double d) {}
+}
+main() {
+  new A(1, 2.0);
 }
 ''');
   }
@@ -3852,7 +3896,7 @@ abstract class A {
   String m3(int p1, double p2, Map<int, List<String>> p3);
   String m4(p1, p2);
   String m5(p1, [int p2 = 2, int p3, p4 = 4]);
-  String m6(p1, {int p2: 2, int p3, p4: 4});
+  String m6(p1, {int p2 = 2, int p3, p4: 4});
 }
 
 class B extends A {
@@ -3865,7 +3909,7 @@ abstract class A {
   String m3(int p1, double p2, Map<int, List<String>> p3);
   String m4(p1, p2);
   String m5(p1, [int p2 = 2, int p3, p4 = 4]);
-  String m6(p1, {int p2: 2, int p3, p4: 4});
+  String m6(p1, {int p2 = 2, int p3, p4: 4});
 }
 
 class B extends A {
@@ -3895,7 +3939,7 @@ class B extends A {
   }
 
   @override
-  String m6(p1, {int p2: 2, int p3, p4: 4}) {
+  String m6(p1, {int p2 = 2, int p3, p4 = 4}) {
     // TODO: implement m6
   }
 }
@@ -4083,6 +4127,146 @@ class B extends A {
   }
 }
 ''');
+  }
+
+  test_createMixin() async {
+    await resolveTestUnit('''
+main() {
+  Test v = null;
+}
+''');
+    await assertHasFix(DartFixKind.CREATE_MIXIN, '''
+main() {
+  Test v = null;
+}
+
+mixin Test {
+}
+''');
+    _assertLinkedGroup(change.linkedEditGroups[0], ['Test v =', 'Test {']);
+  }
+
+  test_createMixin_BAD_hasUnresolvedPrefix() async {
+    await resolveTestUnit('''
+main() {
+  prefix.Test v = null;
+}
+''');
+    await assertNoFix(DartFixKind.CREATE_MIXIN);
+  }
+
+  test_createMixin_BAD_instanceCreation_withNew() async {
+    await resolveTestUnit('''
+main() {
+  new Test();
+}
+''');
+    await assertNoFix(DartFixKind.CREATE_MIXIN);
+  }
+
+  test_createMixin_BAD_instanceCreation_withoutNew() async {
+    await resolveTestUnit('''
+main() {
+  Test();
+}
+''');
+    await assertNoFix(DartFixKind.CREATE_MIXIN);
+  }
+
+  test_createMixin_inLibraryOfPrefix() async {
+    String libCode = r'''
+library my.lib;
+
+class A {}
+''';
+    addSource('/project/lib.dart', libCode);
+    await resolveTestUnit('''
+import 'lib.dart' as lib;
+
+main() {
+  lib.A a = null;
+  lib.Test t = null;
+}
+''');
+    AnalysisError error = await _findErrorToFix();
+    fix = await _assertHasFix(DartFixKind.CREATE_MIXIN, error);
+    change = fix.change;
+    // apply to "lib.dart"
+    List<SourceFileEdit> fileEdits = change.edits;
+    expect(fileEdits, hasLength(1));
+    SourceFileEdit fileEdit = change.edits[0];
+    expect(fileEdit.file, convertPath('/project/lib.dart'));
+    expect(SourceEdit.applySequence(libCode, fileEdit.edits), r'''
+library my.lib;
+
+class A {}
+
+mixin Test {
+}
+''');
+    expect(change.linkedEditGroups, hasLength(1));
+  }
+
+  test_createMixin_innerLocalFunction() async {
+    await resolveTestUnit('''
+f() {
+  g() {
+    Test v = null;
+  }
+}
+''');
+    await assertHasFix(DartFixKind.CREATE_MIXIN, '''
+f() {
+  g() {
+    Test v = null;
+  }
+}
+
+mixin Test {
+}
+''');
+    _assertLinkedGroup(change.linkedEditGroups[0], ['Test v =', 'Test {']);
+  }
+
+  test_createMixin_itemOfList() async {
+    await resolveTestUnit('''
+main() {
+  var a = [Test];
+}
+''');
+    await assertHasFix(DartFixKind.CREATE_MIXIN, '''
+main() {
+  var a = [Test];
+}
+
+mixin Test {
+}
+''');
+    _assertLinkedGroup(change.linkedEditGroups[0], ['Test];', 'Test {']);
+  }
+
+  test_createMixin_itemOfList_inAnnotation() async {
+    errorFilter = (AnalysisError error) {
+      return error.errorCode == StaticWarningCode.UNDEFINED_IDENTIFIER;
+    };
+    await resolveTestUnit('''
+class MyAnnotation {
+  const MyAnnotation(a, b);
+}
+@MyAnnotation(int, const [Test])
+main() {}
+''');
+    await assertHasFix(DartFixKind.CREATE_MIXIN, '''
+class MyAnnotation {
+  const MyAnnotation(a, b);
+}
+@MyAnnotation(int, const [Test])
+main() {}
+
+mixin Test {
+}
+''');
+    _assertLinkedGroup(change.linkedEditGroups[0], ['Test])', 'Test {']);
   }
 
   test_createNoSuchMethod_BAD_classTypeAlias() async {
@@ -4551,6 +4735,7 @@ main() {
     testFile = '/project/lib/test.dart';
     packageMap['project'] = [newFolder('/project/lib')];
     addSource('/project/lib/src/lib.dart', 'class Test {}');
+    configureDriver();
     await resolveTestUnit('''
 main() {
   Test t;
@@ -5143,25 +5328,48 @@ main() {
 ''');
   }
 
-  test_invokeConstructorUsingNew() async {
-    if (previewDart2) {
-      return;
-    }
+  test_impreciseIntAsDouble() async {
     await resolveTestUnit('''
-class C {
-  C.c();
-}
-main() {
-  C c = C.c();
-}
+double x = 1000000000000000000000000;
 ''');
-    await assertHasFix(DartFixKind.INVOKE_CONSTRUCTOR_USING_NEW, '''
-class C {
-  C.c();
-}
-main() {
-  C c = new C.c();
-}
+    await assertHasFix(DartFixKind.CHANGE_TO_NEAREST_PRECISE_VALUE, '''
+double x = 999999999999999983222784;
+''');
+  }
+
+  test_impreciseIntAsDouble_asCapitalHex() async {
+    await resolveTestUnit('''
+double x = 0X1000000000000000000000001;
+''');
+    await assertHasFix(DartFixKind.CHANGE_TO_NEAREST_PRECISE_VALUE, '''
+double x = 0x1000000000000000000000000;
+''');
+  }
+
+  test_impreciseIntAsDouble_asHex() async {
+    await resolveTestUnit('''
+double x = 0x1000000000000000000000001;
+''');
+    await assertHasFix(DartFixKind.CHANGE_TO_NEAREST_PRECISE_VALUE, '''
+double x = 0x1000000000000000000000000;
+''');
+  }
+
+  test_impreciseIntAsDouble_maxValue() async {
+    await resolveTestUnit('''
+double x = 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
+''');
+    await assertHasFix(DartFixKind.CHANGE_TO_NEAREST_PRECISE_VALUE, '''
+double x = 179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368;
+''');
+  }
+
+  test_impreciseIntAsDouble_maxValue_asHex() async {
+    await resolveTestUnit('''
+double x = 0x100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
+''');
+    await assertHasFix(DartFixKind.CHANGE_TO_NEAREST_PRECISE_VALUE, '''
+double x = 0xFFFFFFFFFFFFF800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000;
 ''');
   }
 
@@ -5613,6 +5821,7 @@ main() {
 ''');
   }
 
+  @FailingTest(issue: 'https://github.com/dart-lang/sdk/issues/33992')
   test_replaceVarWithDynamic() async {
     errorFilter = (AnalysisError error) {
       return error.errorCode == ParserErrorCode.VAR_AS_TYPE_NAME;
@@ -7071,7 +7280,7 @@ class LintFixTest extends BaseFixProcessorTest {
     await _assertNoFix(kind, error);
   }
 
-  Future<Null> findLint(String src, String lintCode, {int length: 1}) async {
+  Future<void> findLint(String src, String lintCode, {int length: 1}) async {
     int errorOffset = src.indexOf('/*LINT*/');
     await resolveTestUnit(src.replaceAll('/*LINT*/', ''));
     error = new AnalysisError(

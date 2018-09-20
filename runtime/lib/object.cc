@@ -319,6 +319,11 @@ DEFINE_NATIVE_ENTRY(Internal_inquireIs64Bit, 0) {
 #endif  // defined(ARCH_IS_64_BIT)
 }
 
+DEFINE_NATIVE_ENTRY(Internal_unsafeCast, 1) {
+  UNREACHABLE();  // Should be erased at Kernel translation time.
+  return arguments->NativeArgAt(0);
+}
+
 static bool ExtractInterfaceTypeArgs(Zone* zone,
                                      const Class& instance_cls,
                                      const TypeArguments& instance_type_args,
@@ -375,7 +380,7 @@ DEFINE_NATIVE_ENTRY(Internal_extractTypeArguments, 2) {
   Class& interface_cls = Class::Handle(zone);
   intptr_t num_type_args = 0;  // Remains 0 when executing Dart 1.0 code.
   // TODO(regis): Check for strong mode too?
-  if (Isolate::Current()->reify_generic_functions()) {
+  if (FLAG_reify_generic_functions) {
     const TypeArguments& function_type_args =
         TypeArguments::Handle(zone, arguments->NativeTypeArgs());
     if (function_type_args.Length() == 1) {
@@ -466,6 +471,73 @@ DEFINE_NATIVE_ENTRY(Internal_prependTypeArguments, 4) {
   GET_NON_NULL_NATIVE_ARGUMENT(Smi, smi_len, arguments->NativeArgAt(3));
   return function_type_arguments.Prepend(
       zone, parent_type_arguments, smi_parent_len.Value(), smi_len.Value());
+}
+
+// Check that a set of type arguments satisfy the type parameter bounds on a
+// closure.
+// Arg0: Closure object
+// Arg1: Type arguments to function
+DEFINE_NATIVE_ENTRY(Internal_boundsCheckForPartialInstantiation, 2) {
+  const Closure& closure =
+      Closure::CheckedHandle(zone, arguments->NativeArgAt(0));
+  const Function& target = Function::Handle(zone, closure.function());
+  const TypeArguments& bounds =
+      TypeArguments::Handle(zone, target.type_parameters());
+
+  // Either the bounds are all-dynamic or the function is not generic.
+  if (bounds.IsNull()) return Object::null();
+
+  const TypeArguments& type_args_to_check =
+      TypeArguments::CheckedHandle(zone, arguments->NativeArgAt(1));
+
+  // This should be guaranteed by the front-end.
+  ASSERT(type_args_to_check.IsNull() ||
+         bounds.Length() <= type_args_to_check.Length());
+
+  // The bounds on the closure may need instantiation.
+  const TypeArguments& instantiator_type_args =
+      TypeArguments::Handle(zone, closure.instantiator_type_arguments());
+  const TypeArguments& function_type_args =
+      TypeArguments::Handle(zone, closure.function_type_arguments());
+
+  AbstractType& supertype = AbstractType::Handle(zone);
+  AbstractType& subtype = AbstractType::Handle(zone);
+  TypeParameter& parameter = TypeParameter::Handle(zone);
+  Error& bound_error = Error::Handle(zone);
+  for (intptr_t i = 0; i < bounds.Length(); ++i) {
+    parameter ^= bounds.TypeAt(i);
+    supertype = parameter.bound();
+    subtype = type_args_to_check.IsNull() ? Object::dynamic_type().raw()
+                                          : type_args_to_check.TypeAt(i);
+
+    ASSERT(!subtype.IsNull() && !subtype.IsMalformedOrMalbounded());
+    ASSERT(!supertype.IsNull() && !supertype.IsMalformedOrMalbounded());
+
+    // The supertype may not be instantiated.
+    if (!AbstractType::InstantiateAndTestSubtype(
+            &subtype, &supertype, &bound_error, instantiator_type_args,
+            function_type_args)) {
+      // Throw a dynamic type error.
+      TokenPosition location;
+      {
+        DartFrameIterator iterator(Thread::Current(),
+                                   StackFrameIterator::kNoCrossThreadIteration);
+        StackFrame* caller_frame = iterator.NextFrame();
+        ASSERT(caller_frame != NULL);
+        location = caller_frame->GetTokenPos();
+      }
+      String& bound_error_message = String::Handle(zone);
+      if (!bound_error.IsNull()) {
+        bound_error_message = String::New(bound_error.ToErrorCString());
+      }
+      String& parameter_name = String::Handle(zone, parameter.Name());
+      Exceptions::CreateAndThrowTypeError(location, subtype, supertype,
+                                          parameter_name, bound_error_message);
+      UNREACHABLE();
+    }
+  }
+
+  return Object::null();
 }
 
 DEFINE_NATIVE_ENTRY(InvocationMirror_unpackTypeArguments, 2) {

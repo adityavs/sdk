@@ -75,7 +75,7 @@ float_array_static_test: MissingCompileTimeError
 io/*: Skip # Issue 30618
 
 # All static_tests have expected compile-time errors.
-[ $compiler != app_jitk && $compiler != dart2analyzer && $compiler != dartdevc && $compiler != dartk && $compiler != dartkp && $runtime != none && $strong ]
+[ $compiler != app_jitk && $compiler != dart2analyzer && $compiler != dartdevc && $compiler != dartk && $compiler != dartkb && $compiler != dartkp && $runtime != none && $strong ]
 float_array_static_test: MissingCompileTimeError
 
 [ $compiler == none && $runtime == vm && $system == fuchsia ]
@@ -94,12 +94,6 @@ io/named_pipe_script_test: Pass, RuntimeError # Issue 28737
 [ $runtime == none && !$strong ]
 io/process_exit_negative_test: Fail, OK # Must be run to exit with non-zero exit code.
 
-# These tests spawn a process that imports using a http URL, since
-# spawned processes now run in Dart2 mode the tests fail as http URL imports
-# is not supported by the front end.
-[ $runtime == vm && ($compiler == app_jit || $compiler == none) ]
-http_launch_test: RuntimeError # Issue 33388
-
 [ $system == linux && ($runtime == flutter || $runtime == vm) ]
 io/http_basic_test: Pass, Slow, Timeout # Issue 28046, These tests might be slow on an opt counter threshold bot. They also time out on the bot occasionally => flaky test issue 28046
 io/http_launch_test: Pass, Slow, Timeout # Issue 28046, These tests might be slow on an opt counter threshold bot. They also time out on the bot occasionally => flaky test issue 28046
@@ -113,8 +107,7 @@ io/secure_server_client_certificate_test: Skip # Re-enable once the bots have be
 io/socket_connect_stream_data_close_cancel_test: Pass, Timeout # Issue 27453
 io/socket_many_connections_test: Skip # This test fails with "Too many open files" on the Mac OS buildbot. This is expected as MacOS by default runs with a very low number of allowed open files ('ulimit -n' says something like 256).
 
-[ $strong && ($compiler == dartk || $compiler == dartkp) ]
-io/directory_test: RuntimeError
+[ $strong && ($compiler == dartk || $compiler == dartkb || $compiler == dartkp) ]
 io/file_error_test: RuntimeError
 io/file_test: RuntimeError
 io/http_auth_digest_test: RuntimeError
@@ -132,7 +125,7 @@ io/web_socket_pipe_test: RuntimeError
 io/web_socket_protocol_processor_test: CompileTimeError
 io/zlib_test: RuntimeError
 
-[ !$strong && ($compiler == dartk || $compiler == dartkp) ]
+[ !$strong && ($compiler == dartk || $compiler == dartkb || $compiler == dartkp) ]
 io/compile_all_test: Skip # Crashes
 io/http_client_connect_test: Skip # Flaky.
 io/http_content_length_test: Skip # Flaky.
@@ -179,7 +172,10 @@ package/scenarios/invalid/same_package_twice_test: Pass # Issue 24119
 deferred_transitive_import_error_test: Crash
 fragmentation_test: Pass, Crash # Issue 31421
 io/addlatexhash_test: Pass, Crash # Issue 31252
+io/many_directory_operations_test: SkipSlow
+io/many_file_operations_test: SkipSlow
 io/raw_datagram_read_all_test: Pass, Fail # Timing dependent.
-io/skipping_dart2js_compilations_test: Pass, Slow # Slow.
-io/test_runner_test: Pass, Slow # Slow.
+io/skipping_dart2js_compilations_test: SkipSlow
+io/test_runner_test: SkipSlow
 package/*: SkipByDesign # Launches VMs in interesting ways.
+typed_data_isolate_test: SkipSlow

@@ -53,7 +53,6 @@ class AnalysisOptionsImplTest {
       'dart:core': ['/dart_core.patch.dart']
     };
     modifiedOptions.preserveComments = false;
-    modifiedOptions.strongMode = true;
     modifiedOptions.trackCacheDependencies = false;
 
     modifiedOptions.resetToDefaults();
@@ -76,7 +75,6 @@ class AnalysisOptionsImplTest {
     expect(modifiedOptions.lintRules, defaultOptions.lintRules);
     expect(modifiedOptions.patchPaths, defaultOptions.patchPaths);
     expect(modifiedOptions.preserveComments, defaultOptions.preserveComments);
-    expect(modifiedOptions.strongMode, defaultOptions.strongMode);
     expect(modifiedOptions.trackCacheDependencies,
         defaultOptions.trackCacheDependencies);
   }
@@ -194,7 +192,7 @@ class SourcesChangedEventTest {
 
   static void assertEvent(SourcesChangedEvent event,
       {bool wereSourcesAdded: false,
-      List<Source> changedSources: Source.EMPTY_LIST,
+      List<Source> changedSources: const <Source>[],
       bool wereSourcesRemoved: false}) {
     expect(event.wereSourcesAdded, wereSourcesAdded);
     expect(event.changedSources, changedSources);
@@ -207,7 +205,7 @@ class SourcesChangedListener {
 
   void assertEvent(
       {bool wereSourcesAdded: false,
-      List<Source> changedSources: Source.EMPTY_LIST,
+      List<Source> changedSources: const <Source>[],
       bool wereSourcesRemovedOrDeleted: false}) {
     if (actualEvents.isEmpty) {
       fail('Expected event but found none');

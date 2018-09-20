@@ -10,9 +10,10 @@
 #include "platform/atomic.h"
 #include "platform/safe_stack.h"
 #include "vm/bitfield.h"
+#include "vm/constants.h"
 #include "vm/globals.h"
 #include "vm/handles.h"
-#include "vm/heap/store_buffer.h"
+#include "vm/heap/pointer_block.h"
 #include "vm/os_thread.h"
 #include "vm/runtime_entry_list.h"
 
@@ -21,7 +22,7 @@ namespace dart {
 class AbstractType;
 class ApiLocalScope;
 class Array;
-class CHA;
+class CompilerState;
 class Class;
 class Code;
 class CompilerStats;
@@ -82,8 +83,8 @@ class Zone;
 #define CACHED_VM_STUBS_LIST(V)
 #else
 #define CACHED_VM_STUBS_LIST(V)                                                \
-  V(RawCode*, update_store_buffer_code_,                                       \
-    StubCode::UpdateStoreBuffer_entry()->code(), NULL)                         \
+  V(RawCode*, write_barrier_code_, StubCode::WriteBarrier_entry()->code(),     \
+    NULL)                                                                      \
   V(RawCode*, fix_callers_target_code_,                                        \
     StubCode::FixCallersTarget_entry()->code(), NULL)                          \
   V(RawCode*, fix_allocation_stub_code_,                                       \
@@ -138,8 +139,8 @@ class Zone;
 #define CACHED_VM_STUBS_ADDRESSES_LIST(V)
 #else
 #define CACHED_VM_STUBS_ADDRESSES_LIST(V)                                      \
-  V(uword, update_store_buffer_entry_point_,                                   \
-    StubCode::UpdateStoreBuffer_entry()->EntryPoint(), 0)                      \
+  V(uword, write_barrier_entry_point_,                                         \
+    StubCode::WriteBarrier_entry()->EntryPoint(), 0)                           \
   V(uword, call_to_runtime_entry_point_,                                       \
     StubCode::CallToRuntime_entry()->EntryPoint(), 0)                          \
   V(uword, null_error_shared_without_fpu_regs_entry_point_,                    \
@@ -163,6 +164,7 @@ class Zone;
     NativeEntry::NoScopeNativeCallWrapperEntry(), 0)                           \
   V(uword, auto_scope_native_wrapper_entry_point_,                             \
     NativeEntry::AutoScopeNativeCallWrapperEntry(), 0)                         \
+  V(uword, interpret_call_entry_point_, RuntimeEntry::InterpretCallEntry(), 0) \
   V(RawString**, predefined_symbols_address_, Symbols::PredefinedAddress(),    \
     NULL)                                                                      \
   V(uword, double_nan_address_, reinterpret_cast<uword>(&double_nan_constant), \
@@ -212,11 +214,15 @@ class Thread : public BaseThread {
 
   // The currently executing thread, or NULL if not yet initialized.
   static Thread* Current() {
+#if defined(HAS_C11_THREAD_LOCAL)
+    return OSThread::CurrentVMThread();
+#else
     BaseThread* thread = OSThread::GetCurrentTLS();
     if (thread == NULL || thread->is_os_thread()) {
       return NULL;
     }
     return reinterpret_cast<Thread*>(thread);
+#endif
   }
 
   // Makes the current thread enter 'isolate'.
@@ -268,8 +274,10 @@ class Thread : public BaseThread {
     kOsrRequest = 0x1,  // Current stack overflow caused by OSR request.
   };
 
-  uword stack_overflow_flags_address() const {
-    return reinterpret_cast<uword>(&stack_overflow_flags_);
+  uword write_barrier_mask() const { return write_barrier_mask_; }
+
+  static intptr_t write_barrier_mask_offset() {
+    return OFFSET_OF(Thread, write_barrier_mask_);
   }
   static intptr_t stack_overflow_flags_offset() {
     return OFFSET_OF(Thread, stack_overflow_flags_);
@@ -298,6 +306,9 @@ class Thread : public BaseThread {
   void ScheduleInterruptsLocked(uword interrupt_bits);
   RawError* HandleInterrupts();
   uword GetAndClearInterrupts();
+  bool HasScheduledInterrupts() const {
+    return (stack_limit_ & kInterruptsMask) != 0;
+  }
 
   // OSThread corresponding to this thread.
   OSThread* os_thread() const { return os_thread_; }
@@ -314,7 +325,7 @@ class Thread : public BaseThread {
   void IncrementMemoryCapacity(uintptr_t value) {
     current_zone_capacity_ += value;
     if (current_zone_capacity_ > zone_high_watermark_) {
-      SetHighWatermark(current_zone_capacity_);
+      zone_high_watermark_ = current_zone_capacity_;
     }
   }
 
@@ -327,9 +338,7 @@ class Thread : public BaseThread {
 
   uintptr_t zone_high_watermark() const { return zone_high_watermark_; }
 
-  void ResetHighWatermark() { SetHighWatermark(current_zone_capacity_); }
-
-  void SetHighWatermark(intptr_t value);
+  void ResetHighWatermark() { zone_high_watermark_ = current_zone_capacity_; }
 
   // The reusable api local scope for this thread.
   ApiLocalScope* api_reusable_scope() const { return api_reusable_scope_; }
@@ -360,15 +369,9 @@ class Thread : public BaseThread {
   // Has |this| exited Dart code?
   bool HasExitedDartCode() const;
 
-  // The (topmost) CHA for the compilation in this thread.
-  CHA* cha() const {
-    ASSERT(isolate_ != NULL);
-    return cha_;
-  }
-
-  void set_cha(CHA* value) {
-    ASSERT(isolate_ != NULL);
-    cha_ = value;
+  CompilerState& compiler_state() {
+    ASSERT(compiler_state_ != nullptr);
+    return *compiler_state_;
   }
 
   HierarchyInfo* hierarchy_info() const {
@@ -517,6 +520,21 @@ class Thread : public BaseThread {
   CACHED_CONSTANTS_LIST(DEFINE_OFFSET_METHOD)
 #undef DEFINE_OFFSET_METHOD
 
+#if defined(TARGET_ARCH_ARM) || defined(TARGET_ARCH_ARM64) ||                  \
+    defined(TARGET_ARCH_X64)
+  static intptr_t write_barrier_wrappers_offset(Register reg) {
+    ASSERT((kDartAvailableCpuRegs & (1 << reg)) != 0);
+    intptr_t index = 0;
+    for (intptr_t i = 0; i < kNumberOfCpuRegisters; ++i) {
+      if ((kDartAvailableCpuRegs & (1 << i)) == 0) continue;
+      if (i == reg) break;
+      ++index;
+    }
+    return OFFSET_OF(Thread, write_barrier_wrappers_entry_points_) +
+           index * sizeof(uword);
+  }
+#endif
+
 #define DEFINE_OFFSET_METHOD(name)                                             \
   static intptr_t name##_entry_point_offset() {                                \
     return OFFSET_OF(Thread, name##_entry_point_);                             \
@@ -535,35 +553,6 @@ class Thread : public BaseThread {
   static intptr_t OffsetFromThread(const Object& object);
   static bool ObjectAtOffset(intptr_t offset, Object* object);
   static intptr_t OffsetFromThread(const RuntimeEntry* runtime_entry);
-
-  static const intptr_t kNoDeoptId = -1;
-  static const intptr_t kDeoptIdStep = 2;
-  static const intptr_t kDeoptIdBeforeOffset = 0;
-  static const intptr_t kDeoptIdAfterOffset = 1;
-  intptr_t deopt_id() const { return deopt_id_; }
-  void set_deopt_id(int value) {
-    ASSERT(value >= 0);
-    deopt_id_ = value;
-  }
-  intptr_t GetNextDeoptId() {
-    ASSERT(deopt_id_ != kNoDeoptId);
-    const intptr_t id = deopt_id_;
-    deopt_id_ += kDeoptIdStep;
-    return id;
-  }
-
-  static intptr_t ToDeoptAfter(intptr_t deopt_id) {
-    ASSERT(IsDeoptBefore(deopt_id));
-    return deopt_id + kDeoptIdAfterOffset;
-  }
-
-  static bool IsDeoptBefore(intptr_t deopt_id) {
-    return (deopt_id % kDeoptIdStep) == kDeoptIdBeforeOffset;
-  }
-
-  static bool IsDeoptAfter(intptr_t deopt_id) {
-    return (deopt_id % kDeoptIdStep) == kDeoptIdAfterOffset;
-  }
 
   LongJumpScope* long_jump_base() const { return long_jump_base_; }
   void set_long_jump_base(LongJumpScope* value) { long_jump_base_ = value; }
@@ -704,6 +693,12 @@ class Thread : public BaseThread {
     safepoint_state_ =
         BlockedForSafepointField::update(value, safepoint_state_);
   }
+  bool BypassSafepoints() const {
+    return BypassSafepointsField::decode(safepoint_state_);
+  }
+  static uint32_t SetBypassSafepoints(bool value, uint32_t state) {
+    return BypassSafepointsField::update(value, state);
+  }
 
   enum ExecutionState {
     kThreadInVM = 0,
@@ -789,6 +784,13 @@ class Thread : public BaseThread {
   template <class T>
   T* AllocateReusableHandle();
 
+  // Set the current compiler state and return the previous compiler state.
+  CompilerState* SetCompilerState(CompilerState* state) {
+    CompilerState* previous = compiler_state_;
+    compiler_state_ = state;
+    return previous;
+  }
+
   // Accessed from generated code.
   // ** This block of fields must come first! **
   // For AOT cross-compilation, we rely on these members having the same offsets
@@ -797,6 +799,7 @@ class Thread : public BaseThread {
   // different architectures. See also CheckOffsets in dart.cc.
   uword stack_limit_;
   uword stack_overflow_flags_;
+  uword write_barrier_mask_;
   Isolate* isolate_;
   Heap* heap_;
   uword top_;
@@ -810,7 +813,7 @@ class Thread : public BaseThread {
   // generated code to runtime.
   // TODO(dartbug.com/33549): Clean this up when unboxed values
   // could be passed as arguments.
-  int64_t unboxed_int64_runtime_arg_;
+  ALIGN8 int64_t unboxed_int64_runtime_arg_;
 
 // State that is cached in the TLS for fast access in generated code.
 #define DECLARE_MEMBERS(type_name, member_name, expr, default_init_value)      \
@@ -825,6 +828,11 @@ class Thread : public BaseThread {
 #define DECLARE_MEMBERS(returntype, name, ...) uword name##_entry_point_;
   LEAF_RUNTIME_ENTRY_LIST(DECLARE_MEMBERS)
 #undef DECLARE_MEMBERS
+
+#if defined(TARGET_ARCH_ARM) || defined(TARGET_ARCH_ARM64) ||                  \
+    defined(TARGET_ARCH_X64)
+  uword write_barrier_wrappers_entry_points_[kNumberOfDartAvailableCpuRegs];
+#endif
 
   TimelineStream* dart_stream_;
   OSThread* os_thread_;
@@ -850,10 +858,9 @@ class Thread : public BaseThread {
   int32_t stack_overflow_count_;
 
   // Compiler state:
-  CHA* cha_;
+  CompilerState* compiler_state_ = nullptr;
   HierarchyInfo* hierarchy_info_;
   TypeUsageInfo* type_usage_info_;
-  intptr_t deopt_id_;  // Compilation specific counter.
   RawGrowableObjectArray* pending_functions_;
 
   // JumpToExceptionHandler state:
@@ -880,6 +887,7 @@ class Thread : public BaseThread {
   class AtSafepointField : public BitField<uint32_t, bool, 0, 1> {};
   class SafepointRequestedField : public BitField<uint32_t, bool, 1, 1> {};
   class BlockedForSafepointField : public BitField<uint32_t, bool, 2, 1> {};
+  class BypassSafepointsField : public BitField<uint32_t, bool, 3, 1> {};
   uint32_t safepoint_state_;
   uint32_t execution_state_;
 
@@ -902,9 +910,7 @@ class Thread : public BaseThread {
   void ExitSafepointUsingLock();
   void BlockForSafepoint();
 
-  static void SetCurrent(Thread* current) {
-    OSThread::SetCurrentTLS(reinterpret_cast<uword>(current));
-  }
+  static void SetCurrent(Thread* current) { OSThread::SetCurrentTLS(current); }
 
   void DeferOOBMessageInterrupts();
   void RestoreOOBMessageInterrupts();
@@ -923,6 +929,7 @@ class Thread : public BaseThread {
   friend class Simulator;
   friend class StackZone;
   friend class ThreadRegistry;
+  friend class CompilerState;
   DISALLOW_COPY_AND_ASSIGN(Thread);
 };
 

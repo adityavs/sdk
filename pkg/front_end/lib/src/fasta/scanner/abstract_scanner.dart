@@ -21,7 +21,8 @@ import '../fasta_codes.dart'
 import '../scanner.dart'
     show ErrorToken, Keyword, Scanner, buildUnexpectedCharacterToken;
 
-import 'error_token.dart' show UnterminatedString, UnterminatedToken;
+import 'error_token.dart'
+    show UnsupportedOperator, UnterminatedString, UnterminatedToken;
 
 import 'keyword_state.dart' show KeywordState;
 
@@ -41,12 +42,6 @@ abstract class AbstractScanner implements Scanner {
   static const bool LAZY_ASSIGNMENT_ENABLED = false;
 
   final bool includeComments;
-
-  /**
-   * A flag indicating whether to parse generic method comments, of the form
-   * `/*=T*/` and `/*<T>*/`.  The flag [includeComments] must be set to `true`.
-   */
-  bool scanGenericMethodComments = false;
 
   /**
    * The string offset for the next token that will be created.
@@ -85,8 +80,7 @@ abstract class AbstractScanner implements Scanner {
 
   final List<int> lineStarts;
 
-  AbstractScanner(this.includeComments, this.scanGenericMethodComments,
-      {int numberOfBytesHint})
+  AbstractScanner(this.includeComments, {int numberOfBytesHint})
       : lineStarts = new LineStarts(numberOfBytesHint) {
     this.tail = this.tokens;
   }
@@ -599,7 +593,16 @@ abstract class AbstractScanner implements Scanner {
 
     next = advance();
     if (identical(next, $EQ)) {
-      return select($EQ, TokenType.BANG_EQ_EQ, TokenType.BANG_EQ);
+      //was `return select($EQ, TokenType.BANG_EQ_EQ, TokenType.BANG_EQ);`
+      int next = advance();
+      if (identical(next, $EQ)) {
+        appendPrecedenceToken(TokenType.BANG_EQ_EQ);
+        appendErrorToken(new UnsupportedOperator(tail, tokenStart));
+        return advance();
+      } else {
+        appendPrecedenceToken(TokenType.BANG_EQ);
+        return next;
+      }
     }
     appendPrecedenceToken(TokenType.BANG);
     return next;
@@ -615,7 +618,16 @@ abstract class AbstractScanner implements Scanner {
 
     next = advance();
     if (identical(next, $EQ)) {
-      return select($EQ, TokenType.EQ_EQ_EQ, TokenType.EQ_EQ);
+      // was `return select($EQ, TokenType.EQ_EQ_EQ, TokenType.EQ_EQ);`
+      int next = advance();
+      if (identical(next, $EQ)) {
+        appendPrecedenceToken(TokenType.EQ_EQ_EQ);
+        appendErrorToken(new UnsupportedOperator(tail, tokenStart));
+        return advance();
+      } else {
+        appendPrecedenceToken(TokenType.EQ_EQ);
+        return next;
+      }
     } else if (identical(next, $GT)) {
       appendPrecedenceToken(TokenType.FUNCTION);
       return advance();
@@ -873,26 +885,6 @@ abstract class AbstractScanner implements Scanner {
   void appendComment(int start, TokenType type, bool asciiOnly) {
     if (!includeComments) return;
     CommentToken newComment = createCommentToken(type, start, asciiOnly);
-    if (scanGenericMethodComments) {
-      String value = newComment.lexeme;
-      int length = value.length;
-      if (length > 5 &&
-          value.codeUnitAt(0) == $SLASH &&
-          value.codeUnitAt(1) == $STAR &&
-          value.codeUnitAt(2) == $EQ) {
-        newComment = new CommentToken.fromString(
-            TokenType.GENERIC_METHOD_TYPE_ASSIGN, value, start);
-      } else if (length > 6 &&
-          value.codeUnitAt(0) == $SLASH &&
-          value.codeUnitAt(1) == $STAR &&
-          value.codeUnitAt(2) == $LT &&
-          value.codeUnitAt(length - 1) == $SLASH &&
-          value.codeUnitAt(length - 2) == $STAR &&
-          value.codeUnitAt(length - 3) == $GT) {
-        newComment = new CommentToken.fromString(
-            TokenType.GENERIC_METHOD_TYPE_LIST, value, start);
-      }
-    }
     _appendToCommentStream(newComment);
   }
 

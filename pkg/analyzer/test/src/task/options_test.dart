@@ -52,14 +52,12 @@ class ContextConfigurationTest extends AbstractContextTest {
       optionsProvider.getOptionsFromString(source);
 
   test_configure_bad_options_contents() {
-    (analysisOptions as AnalysisOptionsImpl)
-      ..previewDart2 = false
-      ..strongMode = false;
     configureContext('''
 analyzer:
-  strong-mode:true # misformatted
+  language:
+    enableSuperMixins true; # misformatted
 ''');
-    expect(analysisOptions.strongMode, false);
+    expect(analysisOptions.enableSuperMixins, false);
   }
 
   test_configure_enableSuperMixins() {
@@ -69,6 +67,15 @@ analyzer:
     enableSuperMixins: true
 ''');
     expect(analysisOptions.enableSuperMixins, true);
+  }
+
+  test_configure_enableSuperMixins_badValue() {
+    configureContext('''
+analyzer:
+  language:
+    enableSuperMixins: true;
+''');
+    expect(analysisOptions.enableSuperMixins, false);
   }
 
   test_configure_error_processors() {
@@ -148,25 +155,6 @@ analyzer:
     List<String> names = analysisOptions.enabledPluginNames;
     expect(names, ['angular2']);
   }
-
-  test_configure_strong_mode() {
-    configureContext('''
-analyzer:
-  strong-mode: true
-''');
-    expect(analysisOptions.strongMode, true);
-  }
-
-  test_configure_strong_mode_bad_value() {
-    (analysisOptions as AnalysisOptionsImpl)
-      ..previewDart2 = false
-      ..strongMode = false;
-    configureContext('''
-analyzer:
-  strong-mode: foo
-''');
-    expect(analysisOptions.strongMode, false);
-  }
 }
 
 @reflectiveTest
@@ -203,6 +191,8 @@ class ErrorCodeValuesTest {
             .remove(AnalysisOptionsWarningCode.INCLUDE_FILE_NOT_FOUND.name);
         declaredNames
             .remove(AnalysisOptionsWarningCode.INCLUDED_FILE_WARNING.name);
+        declaredNames
+            .remove(AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT.name);
       } else if (errorType == StaticWarningCode) {
         declaredNames.remove(
             StaticWarningCode.FINAL_NOT_INITIALIZED_CONSTRUCTOR_3_PLUS.name +
@@ -255,7 +245,6 @@ class ErrorCodeValuesTest {
         removeCode(StrongModeCode.NOT_INSTANTIATED_BOUND);
         removeCode(StrongModeCode.TOP_LEVEL_CYCLE);
         removeCode(StrongModeCode.TOP_LEVEL_FUNCTION_LITERAL_BLOCK);
-        removeCode(StrongModeCode.TOP_LEVEL_FUNCTION_LITERAL_PARAMETER);
         removeCode(StrongModeCode.TOP_LEVEL_IDENTIFIER_NO_TYPE);
         removeCode(StrongModeCode.TOP_LEVEL_INSTANCE_GETTER);
         removeCode(StrongModeCode.TOP_LEVEL_INSTANCE_METHOD);
@@ -459,7 +448,10 @@ analyzer:
     AnalysisTarget target = newSource(optionsFilePath, code);
     computeResult(target, ANALYSIS_OPTIONS_ERRORS);
     expect(task, isGenerateOptionsErrorsTask);
-    expect(outputs[ANALYSIS_OPTIONS_ERRORS], isEmpty);
+    expect(outputs[ANALYSIS_OPTIONS_ERRORS], hasLength(1));
+    expect(outputs[ANALYSIS_OPTIONS_ERRORS].first.errorCode,
+        AnalysisOptionsHintCode.STRONG_MODE_SETTING_DEPRECATED);
+
     LineInfo lineInfo = outputs[LINE_INFO];
     expect(lineInfo, isNotNull);
     expect(lineInfo.getLocation(1).lineNumber, 1);
@@ -492,7 +484,10 @@ class GenerateOldOptionsErrorsTaskTest extends AbstractContextTest {
     validate('''
 analyzer:
   strong-mode: true
-    ''', [AnalysisOptionsHintCode.DEPRECATED_ANALYSIS_OPTIONS_FILE_NAME]);
+    ''', [
+      AnalysisOptionsHintCode.DEPRECATED_ANALYSIS_OPTIONS_FILE_NAME,
+      AnalysisOptionsHintCode.STRONG_MODE_SETTING_DEPRECATED
+    ]);
   }
 
   test_finds_issues_in_old_options_files() {
@@ -548,6 +543,21 @@ analyzer:
     ''', [AnalysisOptionsWarningCode.UNRECOGNIZED_ERROR_CODE]);
   }
 
+  test_analyzer_language_bad_format_list() {
+    validate('''
+analyzer:
+  language:
+    - enableSuperMixins: true
+''', [AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT]);
+  }
+
+  test_analyzer_language_bad_format_scalar() {
+    validate('''
+analyzer:
+  language: true
+''', [AnalysisOptionsWarningCode.INVALID_SECTION_FORMAT]);
+  }
+
   test_analyzer_language_supported() {
     validate('''
 analyzer:
@@ -556,12 +566,19 @@ analyzer:
 ''', []);
   }
 
+  test_analyzer_language_supports_empty() {
+    validate('''
+analyzer:
+  language:
+''', []);
+  }
+
   test_analyzer_language_unsupported_key() {
     validate('''
 analyzer:
   language:
     unsupported: true
-''', [AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUES]);
+''', [AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUE]);
   }
 
   test_analyzer_language_unsupported_value() {
@@ -581,6 +598,21 @@ analyzer:
     ''', []);
   }
 
+  test_analyzer_strong_mode_deprecated() {
+    validate('''
+analyzer:
+  strong-mode: true
+    ''', [AnalysisOptionsHintCode.STRONG_MODE_SETTING_DEPRECATED]);
+  }
+
+  test_analyzer_strong_mode_deprecated_key() {
+    validate('''
+analyzer:
+  strong-mode:
+    declaration-casts: false
+''', [AnalysisOptionsWarningCode.ANALYSIS_OPTION_DEPRECATED]);
+  }
+
   test_analyzer_strong_mode_error_code_supported() {
     validate('''
 analyzer:
@@ -589,11 +621,19 @@ analyzer:
 ''', []);
   }
 
-  test_analyzer_strong_mode_false_deprecated() {
+  test_analyzer_strong_mode_false_removed() {
     validate('''
 analyzer:
   strong-mode: false
-    ''', [AnalysisOptionsHintCode.SPEC_MODE_DEPRECATED]);
+    ''', [AnalysisOptionsWarningCode.SPEC_MODE_REMOVED]);
+  }
+
+  test_analyzer_strong_mode_unsupported_key() {
+    validate('''
+analyzer:
+  strong-mode:
+    unsupported: true
+''', [AnalysisOptionsWarningCode.UNSUPPORTED_OPTION_WITH_LEGAL_VALUES]);
   }
 
   test_analyzer_supported_exclude() {
@@ -601,13 +641,6 @@ analyzer:
 analyzer:
   exclude:
     - test/_data/p4/lib/lib1.dart
-    ''', []);
-  }
-
-  test_analyzer_supported_strong_mode() {
-    validate('''
-analyzer:
-  strong-mode: true
     ''', []);
   }
 
@@ -733,5 +766,6 @@ linter:
 
 class TestRule extends LintRule {
   TestRule() : super(name: 'fantastic_test_rule');
+
   TestRule.withName(String name) : super(name: name);
 }

@@ -426,17 +426,17 @@ TEST_CASE(DartAPI_CurrentStackTraceInfo) {
 #endif  // !PRODUCT
 
 TEST_CASE(DartAPI_ErrorHandleTypes) {
-  const String& compile_message = String::Handle(String::New("CompileError"));
-  const String& fatal_message = String::Handle(String::New("FatalError"));
-
   Dart_Handle not_error = NewString("NotError");
-  Dart_Handle api_error = Api::NewError("Api%s", "Error");
+  Dart_Handle api_error = Dart_NewApiError("ApiError");
   Dart_Handle exception_error =
       Dart_NewUnhandledExceptionError(NewString("ExceptionError"));
-  Dart_Handle compile_error =
-      Api::NewHandle(thread, LanguageError::New(compile_message));
-  Dart_Handle fatal_error =
-      Api::NewHandle(thread, UnwindError::New(fatal_message));
+  Dart_Handle compile_error = Dart_NewCompilationError("CompileError");
+  Dart_Handle fatal_error;
+  {
+    TransitionNativeToVM transition(thread);
+    const String& fatal_message = String::Handle(String::New("FatalError"));
+    fatal_error = Api::NewHandle(thread, UnwindError::New(fatal_message));
+  }
 
   EXPECT_VALID(not_error);
   EXPECT(Dart_IsError(api_error));
@@ -481,8 +481,7 @@ TEST_CASE(DartAPI_UnhandleExceptionError) {
 
   // Test with an API Error.
   const char* kApiError = "Api Error Exception Test.";
-  Dart_Handle api_error = Api::NewHandle(
-      thread, ApiError::New(String::Handle(String::New(kApiError))));
+  Dart_Handle api_error = Dart_NewApiError(kApiError);
   Dart_Handle exception_error = Dart_NewUnhandledExceptionError(api_error);
   EXPECT(!Dart_IsApiError(exception_error));
   EXPECT(Dart_IsUnhandledExceptionError(exception_error));
@@ -493,9 +492,7 @@ TEST_CASE(DartAPI_UnhandleExceptionError) {
 
   // Test with a Compilation Error.
   const char* kCompileError = "CompileError Exception Test.";
-  const String& compile_message = String::Handle(String::New(kCompileError));
-  Dart_Handle compile_error =
-      Api::NewHandle(thread, LanguageError::New(compile_message));
+  Dart_Handle compile_error = Dart_NewCompilationError(kCompileError);
   exception_error = Dart_NewUnhandledExceptionError(compile_error);
   EXPECT(!Dart_IsApiError(exception_error));
   EXPECT(Dart_IsUnhandledExceptionError(exception_error));
@@ -505,18 +502,20 @@ TEST_CASE(DartAPI_UnhandleExceptionError) {
   EXPECT_STREQ(kCompileError, exception_cstr);
 
   // Test with a Fatal Error.
-  const String& fatal_message =
-      String::Handle(String::New("FatalError Exception Test."));
-  Dart_Handle fatal_error =
-      Api::NewHandle(thread, UnwindError::New(fatal_message));
+  Dart_Handle fatal_error;
+  {
+    TransitionNativeToVM transition(thread);
+    const String& fatal_message =
+        String::Handle(String::New("FatalError Exception Test."));
+    fatal_error = Api::NewHandle(thread, UnwindError::New(fatal_message));
+  }
   exception_error = Dart_NewUnhandledExceptionError(fatal_error);
   EXPECT(Dart_IsError(exception_error));
   EXPECT(!Dart_IsUnhandledExceptionError(exception_error));
 
   // Test with a Regular object.
   const char* kRegularString = "Regular String Exception Test.";
-  Dart_Handle obj = Api::NewHandle(thread, String::New(kRegularString));
-  exception_error = Dart_NewUnhandledExceptionError(obj);
+  exception_error = Dart_NewUnhandledExceptionError(NewString(kRegularString));
   EXPECT(!Dart_IsApiError(exception_error));
   EXPECT(Dart_IsUnhandledExceptionError(exception_error));
   EXPECT(Dart_IsString(Dart_ErrorGetException(exception_error)));
@@ -581,7 +580,7 @@ TEST_CASE(DartAPI_PropagateCompileTimeError) {
   EXPECT(Dart_IsError(result));
 
   if (FLAG_use_dart_frontend) {
-    EXPECT_SUBSTRING("Expected ';' before this.", Dart_GetError(result));
+    EXPECT_SUBSTRING("Expected ';' after this.", Dart_GetError(result));
   } else {
     EXPECT_SUBSTRING("semicolon expected", Dart_GetError(result));
   }
@@ -593,7 +592,7 @@ TEST_CASE(DartAPI_PropagateCompileTimeError) {
   result = Dart_Invoke(lib, NewString("Func1"), 0, NULL);
   EXPECT(Dart_IsError(result));
   if (FLAG_use_dart_frontend) {
-    EXPECT_SUBSTRING("Expected ';' before this.", Dart_GetError(result));
+    EXPECT_SUBSTRING("Expected ';' after this.", Dart_GetError(result));
   } else {
     EXPECT_SUBSTRING("semicolon expected", Dart_GetError(result));
   }
@@ -605,7 +604,7 @@ TEST_CASE(DartAPI_PropagateCompileTimeError) {
   result = Dart_Invoke(lib, NewString("Func1"), 0, NULL);
   EXPECT(Dart_IsError(result));
   if (FLAG_use_dart_frontend) {
-    EXPECT_SUBSTRING("Expected ';' before this.", Dart_GetError(result));
+    EXPECT_SUBSTRING("Expected ';' after this.", Dart_GetError(result));
   } else {
     EXPECT_SUBSTRING("semicolon expected", Dart_GetError(result));
   }
@@ -794,7 +793,7 @@ TEST_CASE(DartAPI_FunctionName) {
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
   EXPECT_VALID(lib);
 
-  Dart_Handle closure = Dart_GetClosure(lib, NewString("getInt"));
+  Dart_Handle closure = Dart_GetField(lib, NewString("getInt"));
   EXPECT_VALID(closure);
   if (Dart_IsClosure(closure)) {
     closure = Dart_ClosureFunction(closure);
@@ -814,7 +813,7 @@ TEST_CASE(DartAPI_FunctionOwner) {
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
   EXPECT_VALID(lib);
 
-  Dart_Handle closure = Dart_GetClosure(lib, NewString("getInt"));
+  Dart_Handle closure = Dart_GetField(lib, NewString("getInt"));
   EXPECT_VALID(closure);
   if (Dart_IsClosure(closure)) {
     closure = Dart_ClosureFunction(closure);
@@ -844,7 +843,7 @@ TEST_CASE(DartAPI_FunctionIsStatic) {
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
   EXPECT_VALID(lib);
 
-  Dart_Handle closure = Dart_GetClosure(lib, NewString("getInt"));
+  Dart_Handle closure = Dart_GetField(lib, NewString("getInt"));
   EXPECT_VALID(closure);
   if (Dart_IsClosure(closure)) {
     closure = Dart_ClosureFunction(closure);
@@ -882,7 +881,7 @@ TEST_CASE(DartAPI_ClosureFunction) {
   Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
   EXPECT_VALID(lib);
 
-  Dart_Handle closure = Dart_GetClosure(lib, NewString("getInt"));
+  Dart_Handle closure = Dart_GetField(lib, NewString("getInt"));
   EXPECT_VALID(closure);
   EXPECT(Dart_IsClosure(closure));
   Dart_Handle closure_str = Dart_ToString(closure);
@@ -2688,7 +2687,11 @@ VM_UNIT_TEST_CASE(DartAPI_EnterExitScope) {
   {
     EXPECT(thread->api_top_scope() != NULL);
     HANDLESCOPE(thread);
-    const String& str1 = String::Handle(String::New("Test String"));
+    String& str1 = String::Handle();
+    {
+      TransitionNativeToVM transition(thread);
+      str1 = String::New("Test String");
+    }
     Dart_Handle ref = Api::NewHandle(thread, str1.raw());
     String& str2 = String::Handle();
     str2 ^= Api::UnwrapHandle(ref);
@@ -2714,12 +2717,12 @@ VM_UNIT_TEST_CASE(DartAPI_PersistentHandles) {
   {
     CHECK_API_SCOPE(thread);
     HANDLESCOPE(thread);
-    Dart_Handle ref1 = Api::NewHandle(thread, String::New(kTestString1));
+    Dart_Handle ref1 = Dart_NewStringFromCString(kTestString1);
     for (int i = 0; i < 1000; i++) {
       handles[i] = Dart_NewPersistentHandle(ref1);
     }
     Dart_EnterScope();
-    Dart_Handle ref2 = Api::NewHandle(thread, String::New(kTestString2));
+    Dart_Handle ref2 = Dart_NewStringFromCString(kTestString2);
     for (int i = 1000; i < 2000; i++) {
       handles[i] = Dart_NewPersistentHandle(ref2);
     }
@@ -2812,14 +2815,14 @@ VM_UNIT_TEST_CASE(DartAPI_AssignToPersistentHandle) {
   String& str = String::Handle();
 
   // Start with a known persistent handle.
-  Dart_Handle ref1 = Api::NewHandle(T, String::New(kTestString1));
+  Dart_Handle ref1 = Dart_NewStringFromCString(kTestString1);
   Dart_PersistentHandle obj = Dart_NewPersistentHandle(ref1);
   EXPECT(state->IsValidPersistentHandle(obj));
   str ^= PersistentHandle::Cast(obj)->raw();
   EXPECT(str.Equals(kTestString1));
 
   // Now create another local handle and assign it to the persistent handle.
-  Dart_Handle ref2 = Api::NewHandle(T, String::New(kTestString2));
+  Dart_Handle ref2 = Dart_NewStringFromCString(kTestString2);
   Dart_SetPersistentHandle(obj, ref2);
   str ^= PersistentHandle::Cast(obj)->raw();
   EXPECT(str.Equals(kTestString2));
@@ -2827,6 +2830,18 @@ VM_UNIT_TEST_CASE(DartAPI_AssignToPersistentHandle) {
   // Now assign Null to the persistent handle and check.
   Dart_SetPersistentHandle(obj, Dart_Null());
   EXPECT(Dart_IsNull(obj));
+}
+
+static Dart_Handle AllocateNewString(const char* c_str) {
+  Thread* thread = Thread::Current();
+  TransitionNativeToVM transition(thread);
+  return Api::NewHandle(thread, String::New(c_str, Heap::kNew));
+}
+
+static Dart_Handle AllocateOldString(const char* c_str) {
+  Thread* thread = Thread::Current();
+  TransitionNativeToVM transition(thread);
+  return Api::NewHandle(thread, String::New(c_str, Heap::kOld));
 }
 
 static Dart_Handle AsHandle(Dart_PersistentHandle weak) {
@@ -2851,6 +2866,10 @@ static void WeakPersistentHandleCallback(void* isolate_callback_data,
 }
 
 TEST_CASE(DartAPI_WeakPersistentHandle) {
+  // GCs due to allocations or weak handle creation can cause early promotion
+  // and interfer with the scenario this test is verifying.
+  NoHeapGrowthControlScope force_growth;
+
   Dart_Handle local_new_ref = Dart_Null();
   weak_new_ref = Dart_NewWeakPersistentHandle(local_new_ref, NULL, 0,
                                               WeakPersistentHandleCallback);
@@ -2863,17 +2882,12 @@ TEST_CASE(DartAPI_WeakPersistentHandle) {
     Dart_EnterScope();
 
     // Create an object in new space.
-    Dart_Handle new_ref = NewString("new string");
+    Dart_Handle new_ref = AllocateNewString("new string");
     EXPECT_VALID(new_ref);
 
     // Create an object in old space.
-    Dart_Handle old_ref;
-    {
-      CHECK_API_SCOPE(thread);
-      HANDLESCOPE(thread);
-      old_ref = Api::NewHandle(thread, String::New("old string", Heap::kOld));
-      EXPECT_VALID(old_ref);
-    }
+    Dart_Handle old_ref = AllocateOldString("old string");
+    EXPECT_VALID(old_ref);
 
     // Create a weak ref to the new space object.
     weak_new_ref = Dart_NewWeakPersistentHandle(new_ref, NULL, 0,
@@ -2891,6 +2905,7 @@ TEST_CASE(DartAPI_WeakPersistentHandle) {
       TransitionNativeToVM transition(thread);
       // Garbage collect new space.
       GCTestHelper::CollectNewSpace();
+      GCTestHelper::WaitForGCTasks();
     }
 
     // Nothing should be invalidated or cleared.
@@ -2911,6 +2926,7 @@ TEST_CASE(DartAPI_WeakPersistentHandle) {
       TransitionNativeToVM transition(thread);
       // Garbage collect old space.
       Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
+      GCTestHelper::WaitForGCTasks();
     }
 
     // Nothing should be invalidated or cleared.
@@ -2967,6 +2983,7 @@ TEST_CASE(DartAPI_WeakPersistentHandle) {
     // Garbage collect one last time to revisit deleted handles.
     Isolate::Current()->heap()->CollectGarbage(Heap::kNew);
     Isolate::Current()->heap()->CollectGarbage(Heap::kOld);
+    GCTestHelper::WaitForGCTasks();
   }
 }
 
@@ -3156,14 +3173,14 @@ TEST_CASE(DartAPI_WeakPersistentHandleExternalAllocationSizeOldspaceGC) {
   // Check that external allocation in old space can trigger GC.
   Isolate* isolate = Isolate::Current();
   Dart_EnterScope();
-  Dart_Handle live = Api::NewHandle(thread, String::New("live", Heap::kOld));
+  Dart_Handle live = AllocateOldString("live");
   EXPECT_VALID(live);
   Dart_WeakPersistentHandle weak = NULL;
   EXPECT_EQ(0, isolate->heap()->ExternalInWords(Heap::kOld));
   const intptr_t kSmallExternalSize = 1 * KB;
   {
     Dart_EnterScope();
-    Dart_Handle dead = Api::NewHandle(thread, String::New("dead", Heap::kOld));
+    Dart_Handle dead = AllocateOldString("dead");
     EXPECT_VALID(dead);
     weak = Dart_NewWeakPersistentHandle(dead, NULL, kSmallExternalSize,
                                         NopCallback);
@@ -3241,8 +3258,7 @@ TEST_CASE(DartAPI_ImplicitReferencesOldSpace) {
     CHECK_API_SCOPE(thread);
     HANDLESCOPE(thread);
 
-    Dart_Handle local =
-        Api::NewHandle(thread, String::New("strongly reachable", Heap::kOld));
+    Dart_Handle local = AllocateOldString("strongly reachable");
     strong = Dart_NewPersistentHandle(local);
     strong_weak = Dart_NewWeakPersistentHandle(local, NULL, 0, NopCallback);
 
@@ -3252,21 +3268,21 @@ TEST_CASE(DartAPI_ImplicitReferencesOldSpace) {
     EXPECT_VALID(AsHandle(strong_weak));
     EXPECT(Dart_IdentityEquals(AsHandle(strong), AsHandle(strong_weak)))
 
-    weak1 = Dart_NewWeakPersistentHandle(
-        Api::NewHandle(thread, String::New("weakly reachable 1", Heap::kOld)),
-        NULL, 0, ImplicitReferencesCallback);
+    weak1 =
+        Dart_NewWeakPersistentHandle(AllocateOldString("weakly reachable 1"),
+                                     NULL, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak1)));
     EXPECT_VALID(AsHandle(weak1));
 
-    weak2 = Dart_NewWeakPersistentHandle(
-        Api::NewHandle(thread, String::New("weakly reachable 2", Heap::kOld)),
-        NULL, 0, ImplicitReferencesCallback);
+    weak2 =
+        Dart_NewWeakPersistentHandle(AllocateOldString("weakly reachable 2"),
+                                     NULL, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak2)));
     EXPECT_VALID(AsHandle(weak2));
 
-    weak3 = Dart_NewWeakPersistentHandle(
-        Api::NewHandle(thread, String::New("weakly reachable 3", Heap::kOld)),
-        NULL, 0, ImplicitReferencesCallback);
+    weak3 =
+        Dart_NewWeakPersistentHandle(AllocateOldString("weakly reachable 3"),
+                                     NULL, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak3)));
     EXPECT_VALID(AsHandle(weak3));
   }
@@ -3306,8 +3322,7 @@ TEST_CASE(DartAPI_ImplicitReferencesNewSpace) {
     CHECK_API_SCOPE(thread);
     HANDLESCOPE(thread);
 
-    Dart_Handle local =
-        Api::NewHandle(thread, String::New("strongly reachable", Heap::kOld));
+    Dart_Handle local = AllocateOldString("strongly reachable");
     strong = Dart_NewPersistentHandle(local);
     strong_weak = Dart_NewWeakPersistentHandle(local, NULL, 0, NopCallback);
 
@@ -3317,21 +3332,21 @@ TEST_CASE(DartAPI_ImplicitReferencesNewSpace) {
     EXPECT_VALID(AsHandle(strong_weak));
     EXPECT(Dart_IdentityEquals(AsHandle(strong), AsHandle(strong_weak)))
 
-    weak1 = Dart_NewWeakPersistentHandle(
-        Api::NewHandle(thread, String::New("weakly reachable 1", Heap::kNew)),
-        NULL, 0, ImplicitReferencesCallback);
+    weak1 =
+        Dart_NewWeakPersistentHandle(AllocateNewString("weakly reachable 1"),
+                                     NULL, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak1)));
     EXPECT_VALID(AsHandle(weak1));
 
-    weak2 = Dart_NewWeakPersistentHandle(
-        Api::NewHandle(thread, String::New("weakly reachable 2", Heap::kNew)),
-        NULL, 0, ImplicitReferencesCallback);
+    weak2 =
+        Dart_NewWeakPersistentHandle(AllocateNewString("weakly reachable 2"),
+                                     NULL, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak2)));
     EXPECT_VALID(AsHandle(weak2));
 
-    weak3 = Dart_NewWeakPersistentHandle(
-        Api::NewHandle(thread, String::New("weakly reachable 3", Heap::kNew)),
-        NULL, 0, ImplicitReferencesCallback);
+    weak3 =
+        Dart_NewWeakPersistentHandle(AllocateNewString("weakly reachable 3"),
+                                     NULL, 0, ImplicitReferencesCallback);
     EXPECT(!Dart_IsNull(AsHandle(weak3)));
     EXPECT_VALID(AsHandle(weak3));
   }
@@ -3850,8 +3865,9 @@ static void TestFieldOk(Dart_Handle container,
 }
 
 static void TestFieldNotFound(Dart_Handle container, Dart_Handle name) {
-  EXPECT(Dart_IsError(Dart_GetField(container, name)));
-  EXPECT(Dart_IsError(Dart_SetField(container, name, Dart_Null())));
+  EXPECT_ERROR(Dart_GetField(container, name), "NoSuchMethodError");
+  EXPECT_ERROR(Dart_SetField(container, name, Dart_Null()),
+               "NoSuchMethodError");
 }
 
 TEST_CASE(DartAPI_FieldAccess) {
@@ -4083,7 +4099,7 @@ TEST_CASE(DartAPI_FieldAccess) {
   name = NewString("imported_fld");
   TestFieldNotFound(type, name);
   TestFieldNotFound(instance, name);
-  TestFieldOk(lib, name, false, "imported");
+  TestFieldNotFound(lib, name);
 
   // Hidden imported top-level field.  Not found at any level.
   name = NewString("_imported_fld");
@@ -4095,7 +4111,7 @@ TEST_CASE(DartAPI_FieldAccess) {
   name = NewString("imported_getset_fld");
   TestFieldNotFound(type, name);
   TestFieldNotFound(instance, name);
-  TestFieldOk(lib, name, false, "imported getset");
+  TestFieldNotFound(lib, name);
 
   // Hidden imported top-level get/set field.  Not found at any level.
   name = NewString("_imported_getset_fld");
@@ -4923,6 +4939,7 @@ TEST_CASE(DartAPI_NewListOfType) {
 static Dart_Handle PrivateLibName(Dart_Handle lib, const char* str) {
   EXPECT(Dart_IsLibrary(lib));
   Thread* thread = Thread::Current();
+  TransitionNativeToVM transition(thread);
   const Library& library_obj = Api::UnwrapLibraryHandle(thread->zone(), lib);
   const String& name = String::Handle(String::New(str));
   return Api::NewHandle(thread, library_obj.PrivateName(name));
@@ -5006,7 +5023,8 @@ TEST_CASE(DartAPI_Invoke) {
 
   // Static method, wrong arg count.
   EXPECT_ERROR(Dart_Invoke(type, name, 2, bad_args),
-               "did not find static method 'Methods.staticMethod'");
+               "NoSuchMethodError: No static method 'staticMethod' with "
+               "matching arguments");
 
   // Hidden static method.
   name = NewString("_staticMethod");
@@ -5034,8 +5052,8 @@ TEST_CASE(DartAPI_Invoke) {
 
   // Top-level method, wrong arg count.
   EXPECT_ERROR(Dart_Invoke(lib, name, 2, bad_args),
-               "Dart_Invoke: wrong argument count for function 'topMethod': "
-               "2 passed, 1 expected.");
+               "NoSuchMethodError: No top-level method 'topMethod' with "
+               "matching arguments");
 
   // Hidden top-level method.
   name = NewString("_topMethod");
@@ -5131,6 +5149,17 @@ TEST_CASE(DartAPI_Invoke_Null) {
   result = Dart_Invoke(Dart_Null(), function_name, 0, NULL);
   EXPECT(Dart_IsError(result));
   EXPECT(Dart_ErrorHasException(result));
+
+  result = Dart_GetField(Dart_Null(), NewString("toString"));
+  EXPECT_VALID(result);
+  EXPECT(Dart_IsClosure(result));
+
+  result =
+      Dart_SetField(Dart_Null(), NewString("nullHasNoSetters"), Dart_Null());
+  // Not that Dart_SetField expects a non-null receiver.
+  EXPECT_ERROR(
+      result,
+      "NoSuchMethodError: The setter 'nullHasNoSetters=' was called on null");
 }
 
 TEST_CASE(DartAPI_InvokeNoSuchMethod) {
@@ -5228,10 +5257,11 @@ TEST_CASE(DartAPI_Invoke_CrossLibrary) {
   EXPECT_VALID(Dart_Invoke(lib1, NewString("local"), 0, NULL));
   EXPECT_VALID(Dart_Invoke(lib1, NewString("_local"), 0, NULL));
 
-  // We can only invoke non-private imported functions.
-  EXPECT_VALID(Dart_Invoke(lib1, NewString("imported"), 0, NULL));
+  // We cannot invoke imported functions (the library is an explicit receiver).
+  EXPECT_ERROR(Dart_Invoke(lib1, NewString("imported"), 0, NULL),
+               "NoSuchMethodError: No top-level method 'imported' declared");
   EXPECT_ERROR(Dart_Invoke(lib1, NewString("_imported"), 0, NULL),
-               "did not find top-level function '_imported'");
+               "NoSuchMethodError: No top-level method '_imported' declared");
 }
 
 TEST_CASE(DartAPI_InvokeClosure) {
@@ -6029,7 +6059,7 @@ TEST_CASE(DartAPI_ImportLibraryWithPrefix) {
   // not be found directly in lib2.
   Dart_Handle method_name = NewString("foo");
   result = Dart_Invoke(lib2, method_name, 0, NULL);
-  EXPECT_ERROR(result, "Dart_Invoke: did not find top-level function 'foo'");
+  EXPECT_ERROR(result, "NoSuchMethodError: No top-level method 'foo' declared");
 
   // Check that lib1 is available under the prefix in lib2.
   method_name = NewString("foobar");
@@ -6393,24 +6423,28 @@ TEST_CASE(DartAPI_ParsePatchLibrary) {
   result = Dart_LoadLibrary(url, Dart_Null(), source, 0, 0);
   EXPECT_VALID(result);
 
-  const char* patchNames[] = {"main library patch", "patch class only",
-                              "patch no class"};
-  const char* patches[] = {kPatchChars, kPatchClassOnlyChars,
-                           kPatchNoClassChars};
-  const String& lib_url = String::Handle(String::New("theLibrary"));
+  {
+    TransitionNativeToVM transition(thread);
+    const char* patchNames[] = {"main library patch", "patch class only",
+                                "patch no class"};
+    const char* patches[] = {kPatchChars, kPatchClassOnlyChars,
+                             kPatchNoClassChars};
+    const String& lib_url = String::Handle(String::New("theLibrary"));
 
-  const Library& lib = Library::Handle(Library::LookupLibrary(thread, lib_url));
+    const Library& lib =
+        Library::Handle(Library::LookupLibrary(thread, lib_url));
 
-  for (int i = 0; i < 3; i++) {
-    const String& patch_url = String::Handle(String::New(patchNames[i]));
-    const String& patch_source = String::Handle(String::New(patches[i]));
-    const Script& patch_script = Script::Handle(
-        Script::New(patch_url, patch_source, RawScript::kPatchTag));
+    for (int i = 0; i < 3; i++) {
+      const String& patch_url = String::Handle(String::New(patchNames[i]));
+      const String& patch_source = String::Handle(String::New(patches[i]));
+      const Script& patch_script = Script::Handle(
+          Script::New(patch_url, patch_source, RawScript::kPatchTag));
 
-    const Error& err = Error::Handle(lib.Patch(patch_script));
-    if (!err.IsNull()) {
-      OS::PrintErr("Patching error: %s\n", err.ToErrorCString());
-      EXPECT(false);
+      const Error& err = Error::Handle(lib.Patch(patch_script));
+      if (!err.IsNull()) {
+        OS::PrintErr("Patching error: %s\n", err.ToErrorCString());
+        EXPECT(false);
+      }
     }
   }
   result = Dart_SetNativeResolver(result, &PatchNativeResolver, NULL);
@@ -6470,9 +6504,17 @@ TEST_CASE(DartAPI_ParsePatchLibrary) {
   EXPECT_VALID(Dart_IntegerToInt64(result, &value));
   EXPECT_EQ(8, value);
 
-  // Make sure all source files show up in the patched library.
-  const Array& lib_scripts = Array::Handle(lib.LoadedScripts());
-  EXPECT_EQ(4, lib_scripts.Length());
+  {
+    TransitionNativeToVM transition(thread);
+    // Make sure all source files show up in the patched library.
+    const String& lib_url = String::Handle(String::New("theLibrary"));
+
+    const Library& lib =
+        Library::Handle(Library::LookupLibrary(thread, lib_url));
+
+    const Array& lib_scripts = Array::Handle(lib.LoadedScripts());
+    EXPECT_EQ(4, lib_scripts.Length());
+  }
 }
 
 static void MyNativeFunction1(Dart_NativeArguments args) {
@@ -6813,15 +6855,18 @@ TEST_CASE(DartAPI_Multiroot_Valid) {
   EXPECT_VALID(lib);
   Library& lib_obj = Library::Handle();
   lib_obj ^= Api::UnwrapHandle(lib);
-  EXPECT_STREQ("foo:///main.dart", String::Handle(lib_obj.url()).ToCString());
-  const Array& lib_scripts = Array::Handle(lib_obj.LoadedScripts());
-  Script& script = Script::Handle();
-  String& uri = String::Handle();
-  for (intptr_t i = 0; i < lib_scripts.Length(); i++) {
-    script ^= lib_scripts.At(i);
-    uri = script.url();
-    const char* uri_str = uri.ToCString();
-    EXPECT(strstr(uri_str, "foo:///") == uri_str);
+  {
+    TransitionNativeToVM transition(thread);
+    EXPECT_STREQ("foo:///main.dart", String::Handle(lib_obj.url()).ToCString());
+    const Array& lib_scripts = Array::Handle(lib_obj.LoadedScripts());
+    Script& script = Script::Handle();
+    String& uri = String::Handle();
+    for (intptr_t i = 0; i < lib_scripts.Length(); i++) {
+      script ^= lib_scripts.At(i);
+      uri = script.url();
+      const char* uri_str = uri.ToCString();
+      EXPECT(strstr(uri_str, "foo:///") == uri_str);
+    }
   }
   result = Dart_FinalizeLoading(false);
   EXPECT_VALID(result);
@@ -6853,7 +6898,7 @@ TEST_CASE(DartAPI_Multiroot_FailWhenUriIsWrong) {
       "foo1:///main.dart",
       /* multiroot_filepaths= */ "/bar,/baz",
       /* multiroot_scheme= */ "foo");
-  EXPECT_ERROR(lib, "Compilation failed foo1");
+  EXPECT_ERROR(lib, "Compilation failed FileSystemException(uri=foo1:");
 }
 
 void NewNativePort_send123(Dart_Port dest_port_id, Dart_CObject* message) {
@@ -7992,7 +8037,7 @@ TEST_CASE(DartAPI_OnePromotedPeer) {
 // by one.
 TEST_CASE(DartAPI_OneOldSpacePeer) {
   Isolate* isolate = Isolate::Current();
-  Dart_Handle str = Api::NewHandle(thread, String::New("str", Heap::kOld));
+  Dart_Handle str = AllocateOldString("str");
   EXPECT_VALID(str);
   EXPECT(Dart_IsString(str));
   EXPECT_EQ(0, isolate->heap()->PeerCount());
@@ -8029,7 +8074,7 @@ TEST_CASE(DartAPI_CollectOneOldSpacePeer) {
     Thread* T = Thread::Current();
     CHECK_API_SCOPE(T);
     HANDLESCOPE(T);
-    Dart_Handle str = Api::NewHandle(T, String::New("str", Heap::kOld));
+    Dart_Handle str = AllocateOldString("str");
     EXPECT_VALID(str);
     EXPECT(Dart_IsString(str));
     EXPECT_EQ(0, isolate->heap()->PeerCount());
@@ -8063,7 +8108,7 @@ TEST_CASE(DartAPI_CollectOneOldSpacePeer) {
 // by two.
 TEST_CASE(DartAPI_TwoOldSpacePeers) {
   Isolate* isolate = Isolate::Current();
-  Dart_Handle s1 = Api::NewHandle(thread, String::New("s1", Heap::kOld));
+  Dart_Handle s1 = AllocateOldString("s1");
   EXPECT_VALID(s1);
   EXPECT(Dart_IsString(s1));
   EXPECT_EQ(0, isolate->heap()->PeerCount());
@@ -8076,7 +8121,7 @@ TEST_CASE(DartAPI_TwoOldSpacePeers) {
   o1 = &o1;
   EXPECT_VALID(Dart_GetPeer(s1, &o1));
   EXPECT(o1 == reinterpret_cast<void*>(&p1));
-  Dart_Handle s2 = Api::NewHandle(thread, String::New("s2", Heap::kOld));
+  Dart_Handle s2 = AllocateOldString("s2");
   EXPECT_VALID(s2);
   EXPECT(Dart_IsString(s2));
   EXPECT_EQ(1, isolate->heap()->PeerCount());
@@ -8111,7 +8156,7 @@ TEST_CASE(DartAPI_CollectTwoOldSpacePeers) {
     Thread* T = Thread::Current();
     CHECK_API_SCOPE(T);
     HANDLESCOPE(T);
-    Dart_Handle s1 = Api::NewHandle(T, String::New("s1", Heap::kOld));
+    Dart_Handle s1 = AllocateOldString("s1");
     EXPECT_VALID(s1);
     EXPECT(Dart_IsString(s1));
     EXPECT_EQ(0, isolate->heap()->PeerCount());
@@ -8124,7 +8169,7 @@ TEST_CASE(DartAPI_CollectTwoOldSpacePeers) {
     o1 = &o1;
     EXPECT_VALID(Dart_GetPeer(s1, &o1));
     EXPECT(o1 == reinterpret_cast<void*>(&p1));
-    Dart_Handle s2 = Api::NewHandle(T, String::New("s2", Heap::kOld));
+    Dart_Handle s2 = AllocateOldString("s2");
     EXPECT_VALID(s2);
     EXPECT(Dart_IsString(s2));
     EXPECT_EQ(1, isolate->heap()->PeerCount());
@@ -9107,12 +9152,8 @@ TEST_CASE(DartAPI_InvokeImportedFunction) {
 
   Dart_Handle args[2] = {Dart_NewInteger(123), Dart_NewInteger(321)};
   Dart_Handle result = Dart_Invoke(lib, max, 2, args);
-  EXPECT_VALID(result);
-  EXPECT(Dart_IsNumber(result));
-
-  int64_t result_value;
-  EXPECT_VALID(Dart_IntegerToInt64(result, &result_value));
-  EXPECT(result_value == 321);
+  EXPECT_ERROR(result,
+               "NoSuchMethodError: No top-level method 'max' declared.");
 
   // The function 'getCurrentTag' is actually defined in the library
   // dart:developer. However, the library dart:profiler exports dart:developer
@@ -9121,7 +9162,9 @@ TEST_CASE(DartAPI_InvokeImportedFunction) {
   // an interim solution until we fix DartAPI_Invoke_CrossLibrary.
   Dart_Handle getCurrentTag = Dart_NewStringFromCString("getCurrentTag");
   result = Dart_Invoke(lib, getCurrentTag, 0, NULL);
-  EXPECT_VALID(result);
+  EXPECT_ERROR(
+      result,
+      "NoSuchMethodError: No top-level method 'getCurrentTag' declared.");
 }
 
 #endif  // !PRODUCT

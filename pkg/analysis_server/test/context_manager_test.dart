@@ -35,7 +35,6 @@ import 'package:test_reflective_loader/test_reflective_loader.dart';
 import 'package:watcher/watcher.dart';
 
 import 'mock_sdk.dart';
-import 'mocks.dart';
 import 'src/plugin/plugin_manager_test.dart';
 
 main() {
@@ -445,10 +444,6 @@ test_pack:lib/''');
     newFile('$examplePath/${ContextManagerImpl.PACKAGE_SPEC_NAME}');
     newFile('$examplePath/example.dart');
 
-    packageMapProvider.packageMap['proj'] = <Folder>[
-      resourceProvider.getResource(libPath)
-    ];
-
     manager.setRoots(<String>[projPath], <String>[], <String, String>{});
 
     expect(callbacks.currentContextRoots, hasLength(2));
@@ -495,7 +490,6 @@ test_pack:lib/''');
   }
 
   void test_setRoots_addFolderWithoutPubspec() {
-    packageMapProvider.packageMap = null;
     manager.setRoots(<String>[projPath], <String>[], <String, String>{});
     // verify
     expect(callbacks.currentContextRoots, unorderedEquals([projPath]));
@@ -981,7 +975,6 @@ test_pack:lib/''');
   }
 
   void test_setRoots_removeFolderWithoutPubspec() {
-    packageMapProvider.packageMap = null;
     // add one root - there is a context
     manager.setRoots(<String>[projPath], <String>[], <String, String>{});
     expect(callbacks.currentContextRoots, hasLength(1));
@@ -1442,7 +1435,7 @@ test_pack:lib/''');
     return pumpEventQueue().then((_) {
       expect(file.exists, isFalse);
       expect(projFolder.exists, isTrue);
-      return expect(callbacks.currentFilePaths, hasLength(0));
+      expect(callbacks.currentFilePaths, hasLength(0));
     });
   }
 
@@ -1463,7 +1456,7 @@ test_pack:lib/''');
     return pumpEventQueue().then((_) {
       expect(file.exists, isFalse);
       expect(projFolder.exists, isFalse);
-      return expect(callbacks.currentFilePaths, hasLength(0));
+      expect(callbacks.currentFilePaths, hasLength(0));
     });
   }
 
@@ -1613,26 +1606,6 @@ test_pack:lib/''');
     });
   }
 
-  test_watch_modifyPackageMapDependency_fail() async {
-    // create a dependency file
-    String dependencyPath = join(projPath, 'dep');
-    resourceProvider.newFile(dependencyPath, 'contents');
-    packageMapProvider.dependencies.add(dependencyPath);
-    // create a Dart file
-    String dartFilePath = join(projPath, 'main.dart');
-    resourceProvider.newFile(dartFilePath, 'contents');
-    // the created context has the expected empty package map
-    manager.setRoots(<String>[projPath], <String>[], <String, String>{});
-    expect(_currentPackageMap, isEmpty);
-    // Change the package map dependency so that the packageMapProvider is
-    // re-run, and arrange for it to return null from computePackageMap().
-    packageMapProvider.packageMap = null;
-    resourceProvider.modifyFile(dependencyPath, 'new contents');
-    await pumpEventQueue();
-    // The package map should have been changed to null.
-    expect(_currentPackageMap, isEmpty);
-  }
-
   test_watch_modifyPackagespec() {
     String packagesPath = convertPath('$projPath/.packages');
     String filePath = convertPath('$projPath/bin/main.dart');
@@ -1700,8 +1673,6 @@ abstract class ContextManagerTest extends Object with ResourceProviderMixin {
   ContextManagerImpl manager;
 
   TestContextManagerCallbacks callbacks;
-
-  MockPackageMapProvider packageMapProvider;
 
   UriResolver packageResolver = null;
 
@@ -1771,7 +1742,6 @@ abstract class ContextManagerTest extends Object with ResourceProviderMixin {
     processRequiredPlugins();
     projPath = convertPath('/my/proj');
     resourceProvider.newFolder(projPath);
-    packageMapProvider = new MockPackageMapProvider();
     // Create an SDK in the mock file system.
     new MockSdk(generateSummaryFiles: true, resourceProvider: resourceProvider);
     DartSdkManager sdkManager = new DartSdkManager(convertPath('/'), true);
@@ -1780,7 +1750,6 @@ abstract class ContextManagerTest extends Object with ResourceProviderMixin {
         new FileContentOverlay(),
         sdkManager,
         providePackageResolver,
-        packageMapProvider,
         analysisFilesGlobs,
         InstrumentationService.NULL_SERVICE,
         new AnalysisOptionsImpl());
@@ -1877,7 +1846,8 @@ linter:
     String libPath = '$projPath/${ContextManagerTest.LIB_NAME}';
     newFile('$libPath/_embedder.yaml', content: r'''
 analyzer:
-  strong-mode: true
+  language:
+    enablePreviewDart2: true
   errors:
     missing_return: false
 linter:
@@ -1907,7 +1877,6 @@ linter:
 
     // Verify options were set.
     expect(analysisOptions.enableSuperMixins, isTrue);
-    expect(analysisOptions.strongMode, isTrue);
     expect(errorProcessors, hasLength(2));
     expect(lints, hasLength(2));
 
@@ -2035,7 +2004,7 @@ include: package:boo/other_options.yaml
     String sdkExtPath = '$projPath/sdk_ext';
     newFile('$projPath/test', content: 'test.dart');
     newFile('$sdkExtPath/entry.dart');
-    List<int> bytes = new SummaryBuilder([], null, true).build();
+    List<int> bytes = new SummaryBuilder([], null).build();
     newFileWithBytes('$projPath/sdk.ds', bytes);
     // Setup _embedder.yaml.
     newFile('$libPath/_embedder.yaml', content: r'''
@@ -2080,7 +2049,9 @@ linter:
 
     // Verify options.
     // * from `_embedder.yaml`:
-    expect(analysisOptions.strongMode, isTrue);
+    // TODO(brianwilkerson) Figure out what to use in place of 'strongMode' and
+    // why 'enableSuperMixins' is assumed to come from two different sources.
+//    expect(analysisOptions.strongMode, isTrue);
     expect(analysisOptions.enableSuperMixins, isTrue);
     // * from analysis options:
     expect(analysisOptions.enableSuperMixins, isTrue);
@@ -2224,9 +2195,11 @@ analyzer:
     AnalysisResult result = await callbacks.currentDriver.getResult(file.path);
 
     // Not strong mode - both in the context and the SDK context.
-    AnalysisContext sdkContext = sourceFactory.dartSdk.context;
-    expect(analysisOptions.strongMode, isFalse);
-    expect(sdkContext.analysisOptions.strongMode, isFalse);
+//    AnalysisContext sdkContext = sourceFactory.dartSdk.context;
+    // TODO(brianwilkerson) Figure out whether there is an option other than
+    // 'strongMode' that will apply to the SDK context.
+//    expect(analysisOptions.strongMode, isFalse);
+//    expect(sdkContext.analysisOptions.strongMode, isFalse);
     expect(result.errors, isEmpty);
 
     // Update the options file - turn on 'strong-mode'.
@@ -2240,9 +2213,11 @@ analyzer:
     result = await callbacks.currentDriver.getResult(file.path);
 
     // Not strong mode - both in the context and the SDK context.
-    sdkContext = sourceFactory.dartSdk.context;
-    expect(analysisOptions.strongMode, isTrue);
-    expect(sdkContext.analysisOptions.strongMode, isTrue);
+//    sdkContext = sourceFactory.dartSdk.context;
+    // TODO(brianwilkerson) Figure out whether there is an option other than
+    // 'strongMode' that will apply to the SDK context.
+//    expect(analysisOptions.strongMode, isTrue);
+//    expect(sdkContext.analysisOptions.strongMode, isTrue);
     // The code is strong-mode clean.
     // Verify that TypeSystem was reset.
     expect(result.errors, isEmpty);
@@ -2437,20 +2412,6 @@ analyzer:
     expect(callbacks.currentContextRoots, unorderedEquals([a, c]));
   }
 
-  test_strong_mode_analysis_option() async {
-    // Create files.
-    newFile('$projPath/$optionsFileName', content: r'''
-analyzer:
-  strong-mode: true
-''');
-    String libPath = '$projPath/${ContextManagerTest.LIB_NAME}';
-    newFile('$libPath/main.dart');
-    // Setup context.
-    manager.setRoots(<String>[projPath], <String>[], <String, String>{});
-    // Verify that analysis options was parsed and strong-mode set.
-    expect(analysisOptions.strongMode, true);
-  }
-
   test_watchEvents() async {
     String libPath = newFolder('$projPath/${ContextManagerTest.LIB_NAME}').path;
     manager.setRoots(<String>[projPath], <String>[], <String, String>{});
@@ -2625,11 +2586,6 @@ class TestContextManagerCallbacks extends ContextManagerCallbacks {
   @override
   void broadcastWatchEvent(WatchEvent event) {
     watchEvents.add(event);
-  }
-
-  @override
-  void computingPackageMap(bool computing) {
-    // Do nothing.
   }
 
   @override

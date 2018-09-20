@@ -225,7 +225,7 @@ class Printer extends Visitor<Null> {
   final NameSystem syntheticNames;
   final StringSink sink;
   final Annotator annotator;
-  final Map<String, MetadataRepository<dynamic>> metadata;
+  final Map<String, MetadataRepository<Object>> metadata;
   ImportTable importTable;
   int indentation = 0;
   int column = 0;
@@ -248,13 +248,17 @@ class Printer extends Visitor<Null> {
       this.metadata})
       : this.syntheticNames = syntheticNames ?? new NameSystem();
 
-  Printer._inner(Printer parent, this.importTable, this.metadata)
-      : sink = parent.sink,
-        syntheticNames = parent.syntheticNames,
-        annotator = parent.annotator,
-        showExternal = parent.showExternal,
-        showOffsets = parent.showOffsets,
-        showMetadata = parent.showMetadata;
+  Printer createInner(ImportTable importTable,
+      Map<String, MetadataRepository<Object>> metadata) {
+    return new Printer(sink,
+        importTable: importTable,
+        metadata: metadata,
+        syntheticNames: syntheticNames,
+        annotator: annotator,
+        showExternal: showExternal,
+        showOffsets: showOffsets,
+        showMetadata: showMetadata);
+  }
 
   bool shouldHighlight(Node node) {
     return false;
@@ -395,8 +399,7 @@ class Printer extends Visitor<Null> {
     }
 
     endLine();
-    var inner =
-        new Printer._inner(this, imports, library.enclosingComponent?.metadata);
+    var inner = createInner(imports, library.enclosingComponent?.metadata);
     library.typedefs.forEach(inner.writeNode);
     library.classes.forEach(inner.writeNode);
     library.fields.forEach(inner.writeNode);
@@ -405,7 +408,7 @@ class Printer extends Visitor<Null> {
 
   void writeComponentFile(Component component) {
     ImportTable imports = new ComponentImportTable(component);
-    var inner = new Printer._inner(this, imports, component.metadata);
+    var inner = createInner(imports, component.metadata);
     writeWord('main');
     writeSpaced('=');
     inner.writeMemberReferenceFromReference(component.mainMethodName);
@@ -553,7 +556,7 @@ class Printer extends Visitor<Null> {
 
   void writeType(DartType type) {
     if (type == null) {
-      print('<No DartType>');
+      write('<No DartType>');
     } else {
       type.accept(this);
     }
@@ -567,7 +570,7 @@ class Printer extends Visitor<Null> {
 
   visitSupertype(Supertype type) {
     if (type == null) {
-      print('<No Supertype>');
+      write('<No Supertype>');
     } else {
       writeClassReferenceFromReference(type.className);
       if (type.typeArguments.isNotEmpty) {
@@ -576,10 +579,6 @@ class Printer extends Visitor<Null> {
         writeSymbol('>');
       }
     }
-  }
-
-  visitVectorType(VectorType type) {
-    writeWord('Vector');
   }
 
   visitTypedefType(TypedefType type) {
@@ -695,6 +694,67 @@ class Printer extends Visitor<Null> {
     } else {
       writeBody(body);
     }
+  }
+
+  writeFunctionType(FunctionType node,
+      {List<VariableDeclaration> typedefPositional,
+      List<VariableDeclaration> typedefNamed}) {
+    if (state == WORD) {
+      ensureSpace();
+    }
+    writeTypeParameterList(node.typeParameters);
+    writeSymbol('(');
+    List<DartType> positional = node.positionalParameters;
+
+    bool parametersAnnotated = false;
+    if (typedefPositional != null) {
+      for (VariableDeclaration formal in typedefPositional) {
+        parametersAnnotated =
+            parametersAnnotated || formal.annotations.length > 0;
+      }
+    }
+    if (typedefNamed != null) {
+      for (VariableDeclaration formal in typedefNamed) {
+        parametersAnnotated =
+            parametersAnnotated || formal.annotations.length > 0;
+      }
+    }
+
+    if (parametersAnnotated && typedefPositional != null) {
+      writeList(typedefPositional.take(node.requiredParameterCount),
+          writeVariableDeclaration);
+    } else {
+      writeList(positional.take(node.requiredParameterCount), writeType);
+    }
+
+    if (node.requiredParameterCount < positional.length) {
+      if (node.requiredParameterCount > 0) {
+        writeComma();
+      }
+      writeSymbol('[');
+      if (parametersAnnotated && typedefPositional != null) {
+        writeList(typedefPositional.skip(node.requiredParameterCount),
+            writeVariableDeclaration);
+      } else {
+        writeList(positional.skip(node.requiredParameterCount), writeType);
+      }
+      writeSymbol(']');
+    }
+    if (node.namedParameters.isNotEmpty) {
+      if (node.positionalParameters.isNotEmpty) {
+        writeComma();
+      }
+      writeSymbol('{');
+      if (parametersAnnotated && typedefNamed != null) {
+        writeList(typedefNamed, writeVariableDeclaration);
+      } else {
+        writeList(node.namedParameters, visitNamedType);
+      }
+      writeSymbol('}');
+    }
+    writeSymbol(')');
+    writeSpaced('→');
+    writeType(node.returnType);
   }
 
   void writeBody(Statement body) {
@@ -1018,7 +1078,13 @@ class Printer extends Visitor<Null> {
     writeWord(node.name);
     writeTypeParameterList(node.typeParameters);
     writeSpaced('=');
-    writeNode(node.type);
+    if (node.type is FunctionType) {
+      writeFunctionType(node.type,
+          typedefPositional: node.positionalParameters,
+          typedefNamed: node.namedParameters);
+    } else {
+      writeNode(node.type);
+    }
     endLine(';');
   }
 
@@ -1273,50 +1339,6 @@ class Printer extends Visitor<Null> {
     writeWord(node.import.name);
     writeSymbol(')');
     state = WORD;
-  }
-
-  visitVectorCreation(VectorCreation node) {
-    writeWord('MakeVector');
-    writeSymbol('(');
-    writeWord(node.length.toString());
-    writeSymbol(')');
-  }
-
-  visitVectorGet(VectorGet node) {
-    writeExpression(node.vectorExpression);
-    writeSymbol('[');
-    writeWord(node.index.toString());
-    writeSymbol(']');
-  }
-
-  visitVectorSet(VectorSet node) {
-    writeExpression(node.vectorExpression);
-    writeSymbol('[');
-    writeWord(node.index.toString());
-    writeSymbol(']');
-    writeSpaced('=');
-    writeExpression(node.value);
-  }
-
-  visitVectorCopy(VectorCopy node) {
-    writeWord('CopyVector');
-    writeSymbol('(');
-    writeExpression(node.vectorExpression);
-    writeSymbol(')');
-  }
-
-  visitClosureCreation(ClosureCreation node) {
-    writeWord('MakeClosure');
-    writeSymbol('<');
-    writeNode(node.functionType);
-    if (node.typeArguments.length > 0) writeSymbol(', ');
-    writeList(node.typeArguments, writeType);
-    writeSymbol('>');
-    writeSymbol('(');
-    writeMemberReferenceFromReference(node.topLevelFunctionReference);
-    writeComma();
-    writeExpression(node.contextVector);
-    writeSymbol(')');
   }
 
   visitLibraryDependency(LibraryDependency node) {
@@ -1790,32 +1812,7 @@ class Printer extends Visitor<Null> {
   }
 
   visitFunctionType(FunctionType node) {
-    if (state == WORD) {
-      ensureSpace();
-    }
-    writeTypeParameterList(node.typeParameters);
-    writeSymbol('(');
-    var positional = node.positionalParameters;
-    writeList(positional.take(node.requiredParameterCount), writeType);
-    if (node.requiredParameterCount < positional.length) {
-      if (node.requiredParameterCount > 0) {
-        writeComma();
-      }
-      writeSymbol('[');
-      writeList(positional.skip(node.requiredParameterCount), writeType);
-      writeSymbol(']');
-    }
-    if (node.namedParameters.isNotEmpty) {
-      if (node.positionalParameters.isNotEmpty) {
-        writeComma();
-      }
-      writeSymbol('{');
-      writeList(node.namedParameters, visitNamedType);
-      writeSymbol('}');
-    }
-    writeSymbol(')');
-    writeSpaced('→');
-    writeType(node.returnType);
+    writeFunctionType(node);
   }
 
   visitNamedType(NamedType node) {

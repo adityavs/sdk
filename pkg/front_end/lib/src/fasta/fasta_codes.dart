@@ -21,16 +21,20 @@ const int noLength = 1;
 class Code<T> {
   final String name;
 
+  /// The unique positive integer associated with this code,
+  /// or `-1` if none. This index is used when translating
+  /// this error to its corresponding Analyzer error.
+  final int index;
+
   final Template<T> template;
 
   final String analyzerCode;
 
-  final String dart2jsCode;
-
   final Severity severity;
 
   const Code(this.name, this.template,
-      {this.analyzerCode, this.dart2jsCode, this.severity});
+      {int index, this.analyzerCode, this.severity: Severity.error})
+      : this.index = index ?? -1;
 
   String toString() => name;
 }
@@ -61,15 +65,13 @@ class MessageCode extends Code<Null> implements Message {
   final String tip;
 
   const MessageCode(String name,
-      {String analyzerCode,
-      String dart2jsCode,
-      Severity severity,
+      {int index,
+      String analyzerCode,
+      Severity severity: Severity.error,
       this.message,
       this.tip})
       : super(name, null,
-            analyzerCode: analyzerCode,
-            dart2jsCode: dart2jsCode,
-            severity: severity);
+            index: index, analyzerCode: analyzerCode, severity: severity);
 
   Map<String, dynamic> get arguments => const <String, dynamic>{};
 

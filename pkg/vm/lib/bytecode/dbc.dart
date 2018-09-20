@@ -7,8 +7,7 @@ library vm.bytecode.dbc;
 // List of changes from original DBC (described in runtime/vm/constants_dbc.h):
 //
 // 1. StoreFieldTOS, LoadFieldTOS instructions:
-//    D = index of constant pool entry with FieldOffset,
-//    TypeArgumentsFieldOffset or ConstantContextOffset tags
+//    D = index of constant pool entry with InstanceField tag.
 //    (instead of field offset in words).
 //
 // 2. EntryOptional instruction is revived in order to re-shuffle optional
@@ -22,6 +21,30 @@ library vm.bytecode.dbc;
 //    target if assertions are not enabled. It has the same format as Jump
 //    instruction.
 //
+// 5. StoreContextParent stores context SP[0] into `parent` field of context SP[-1].
+//
+// 6. LoadContextParent loads parent from context SP[0].
+//
+// 7. StoreContextVar stores value SP[0] into context SP[-1] at index D.
+//
+// 8. LoadContextVar loads value from context SP[0] at index D.
+//
+// 9. LoadTypeArgumentsField loads instantiator type arguments from an
+//    instance SP[0].
+//    D = index of TypeArgumentsField constant pool entry corresponding
+//    to an instance's class.
+//
+// 10. InstanceCall1 and InstanceCall2 instructions are superseded by
+//     InstanceCall which works for any number of checked arguments.
+//
+// 11. EntryFixed instruction works like Entry. In addition, it checks number
+//     of fixed arguments.
+//
+// 12. JumpIfNotZeroTypeArgs instruction jumps if number of passed
+//     function type arguments is not zero.
+//
+// 13. PushNull, PushTrue, PushFalse, PushInt instructions added.
+//
 
 enum Opcode {
   kTrap,
@@ -34,6 +57,7 @@ enum Opcode {
   kDrop,
   kJump,
   kJumpIfNoAsserts,
+  kJumpIfNotZeroTypeArgs,
   kReturn,
   kReturnTOS,
   kMove,
@@ -43,12 +67,15 @@ enum Opcode {
   kLoadClassId,
   kLoadClassIdTOS,
   kPushConstant,
+  kPushNull,
+  kPushTrue,
+  kPushFalse,
+  kPushInt,
   kStoreLocal,
   kPopLocal,
   kIndirectStaticCall,
   kStaticCall,
-  kInstanceCall1,
-  kInstanceCall2,
+  kInstanceCall,
   kInstanceCall1Opt,
   kInstanceCall2Opt,
   kPushPolymorphicInstanceCall,
@@ -183,14 +210,20 @@ enum Opcode {
   kStoreField,
   kStoreFieldExt,
   kStoreFieldTOS,
+  kStoreContextParent,
+  kStoreContextVar,
   kLoadField,
   kLoadFieldExt,
   kLoadUntagged,
   kLoadFieldTOS,
+  kLoadTypeArgumentsField,
+  kLoadContextParent,
+  kLoadContextVar,
   kBooleanNegateTOS,
   kBooleanNegate,
   kThrow,
   kEntry,
+  kEntryFixed,
   kEntryOptional,
   kEntryOptimized,
   kFrame,
@@ -273,6 +306,8 @@ const Map<Opcode, Format> BytecodeFormats = const {
       Encoding.kT, const [Operand.tgt, Operand.none, Operand.none]),
   Opcode.kJumpIfNoAsserts: const Format(
       Encoding.kT, const [Operand.tgt, Operand.none, Operand.none]),
+  Opcode.kJumpIfNotZeroTypeArgs: const Format(
+      Encoding.kT, const [Operand.tgt, Operand.none, Operand.none]),
   Opcode.kReturn: const Format(
       Encoding.kA, const [Operand.reg, Operand.none, Operand.none]),
   Opcode.kReturnTOS: const Format(
@@ -291,6 +326,14 @@ const Map<Opcode, Format> BytecodeFormats = const {
       Encoding.k0, const [Operand.none, Operand.none, Operand.none]),
   Opcode.kPushConstant: const Format(
       Encoding.kD, const [Operand.lit, Operand.none, Operand.none]),
+  Opcode.kPushNull: const Format(
+      Encoding.k0, const [Operand.none, Operand.none, Operand.none]),
+  Opcode.kPushTrue: const Format(
+      Encoding.k0, const [Operand.none, Operand.none, Operand.none]),
+  Opcode.kPushFalse: const Format(
+      Encoding.k0, const [Operand.none, Operand.none, Operand.none]),
+  Opcode.kPushInt: const Format(
+      Encoding.kX, const [Operand.imm, Operand.none, Operand.none]),
   Opcode.kStoreLocal: const Format(
       Encoding.kX, const [Operand.xeg, Operand.none, Operand.none]),
   Opcode.kPopLocal: const Format(
@@ -299,9 +342,7 @@ const Map<Opcode, Format> BytecodeFormats = const {
       Encoding.kAD, const [Operand.imm, Operand.lit, Operand.none]),
   Opcode.kStaticCall: const Format(
       Encoding.kAD, const [Operand.imm, Operand.imm, Operand.none]),
-  Opcode.kInstanceCall1: const Format(
-      Encoding.kAD, const [Operand.imm, Operand.lit, Operand.none]),
-  Opcode.kInstanceCall2: const Format(
+  Opcode.kInstanceCall: const Format(
       Encoding.kAD, const [Operand.imm, Operand.lit, Operand.none]),
   Opcode.kInstanceCall1Opt: const Format(
       Encoding.kAD, const [Operand.imm, Operand.lit, Operand.none]),
@@ -571,6 +612,10 @@ const Map<Opcode, Format> BytecodeFormats = const {
       Encoding.kAD, const [Operand.reg, Operand.reg, Operand.none]),
   Opcode.kStoreFieldTOS: const Format(
       Encoding.kD, const [Operand.lit, Operand.none, Operand.none]),
+  Opcode.kStoreContextParent: const Format(
+      Encoding.k0, const [Operand.none, Operand.none, Operand.none]),
+  Opcode.kStoreContextVar: const Format(
+      Encoding.kD, const [Operand.imm, Operand.none, Operand.none]),
   Opcode.kLoadField: const Format(
       Encoding.kABC, const [Operand.reg, Operand.reg, Operand.imm]),
   Opcode.kLoadFieldExt: const Format(
@@ -579,6 +624,12 @@ const Map<Opcode, Format> BytecodeFormats = const {
       Encoding.kABC, const [Operand.reg, Operand.reg, Operand.imm]),
   Opcode.kLoadFieldTOS: const Format(
       Encoding.kD, const [Operand.lit, Operand.none, Operand.none]),
+  Opcode.kLoadTypeArgumentsField: const Format(
+      Encoding.kD, const [Operand.lit, Operand.none, Operand.none]),
+  Opcode.kLoadContextParent: const Format(
+      Encoding.k0, const [Operand.none, Operand.none, Operand.none]),
+  Opcode.kLoadContextVar: const Format(
+      Encoding.kD, const [Operand.imm, Operand.none, Operand.none]),
   Opcode.kBooleanNegateTOS: const Format(
       Encoding.k0, const [Operand.none, Operand.none, Operand.none]),
   Opcode.kBooleanNegate: const Format(
@@ -587,6 +638,10 @@ const Map<Opcode, Format> BytecodeFormats = const {
       Encoding.kA, const [Operand.imm, Operand.none, Operand.none]),
   Opcode.kEntry: const Format(
       Encoding.kD, const [Operand.imm, Operand.none, Operand.none]),
+  Opcode.kEntryFixed: const Format(
+      Encoding.kAD, const [Operand.imm, Operand.imm, Operand.none]),
+  Opcode.kEntryOptional: const Format(
+      Encoding.kABC, const [Operand.imm, Operand.imm, Operand.imm]),
   Opcode.kEntryOptimized: const Format(
       Encoding.kAD, const [Operand.imm, Operand.imm, Operand.none]),
   Opcode.kFrame: const Format(
@@ -647,8 +702,6 @@ const Map<Opcode, Format> BytecodeFormats = const {
       Encoding.kAD, const [Operand.imm, Operand.imm, Operand.none]),
   Opcode.kDeoptRewind: const Format(
       Encoding.k0, const [Operand.none, Operand.none, Operand.none]),
-  Opcode.kEntryOptional: const Format(
-      Encoding.kABC, const [Operand.imm, Operand.imm, Operand.imm]),
 };
 
 // Should match constant in runtime/vm/stack_frame_dbc.h.

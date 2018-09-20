@@ -86,7 +86,7 @@ Element _getKnownElement(Expression expression) {
   } else if (expression is NamedExpression) {
     return _getKnownElement(expression.expression);
   } else if (expression is FunctionExpression) {
-    return expression.element;
+    return expression.declaredElement;
   } else if (expression is PropertyAccess) {
     return expression.propertyName.staticElement;
   } else if (expression is Identifier) {
@@ -354,7 +354,7 @@ class CodeChecker extends RecursiveAstVisitor {
   void visitDefaultFormalParameter(DefaultFormalParameter node) {
     // Check that defaults have the proper subtype.
     var parameter = node.parameter;
-    var parameterType = _elementType(parameter.element);
+    var parameterType = _elementType(parameter.declaredElement);
     assert(parameterType != null);
     var defaultValue = node.defaultValue;
     if (defaultValue != null) {
@@ -378,7 +378,7 @@ class CodeChecker extends RecursiveAstVisitor {
 
   @override
   void visitFieldFormalParameter(FieldFormalParameter node) {
-    var element = node.element;
+    var element = node.declaredElement;
     var typeName = node.type;
     if (typeName != null) {
       var type = _elementType(element);
@@ -978,7 +978,7 @@ class CodeChecker extends RecursiveAstVisitor {
     FunctionType functionType;
     var parent = body.parent;
     if (parent is Declaration) {
-      functionType = _elementType(parent.element);
+      functionType = _elementType(parent.declaredElement);
     } else {
       assert(parent is FunctionExpression);
       functionType =
@@ -1425,7 +1425,7 @@ class _OverrideChecker {
   /// [covariantInterfaces] that may allow those members to be called in an
   /// unsound way.
   ///
-  /// See [_findCovariantChecksForMember] for more information and an exmaple.
+  /// See [_findCovariantChecksForMember] for more information and an example.
   Set<Element> _findCovariantChecks(Iterable<ExecutableElement> members,
       Iterable<ClassElement> covariantInterfaces,
       [Set<Element> covariantChecks]) {
@@ -1708,7 +1708,7 @@ class _OverrideChecker {
           continue;
         }
         for (var variable in member.fields.variables) {
-          var element = variable.element as PropertyInducingElement;
+          var element = variable.declaredElement as PropertyInducingElement;
           checkMember(element.getter, member);
           if (!variable.isFinal && !variable.isConst) {
             checkMember(element.setter, member);
@@ -1718,7 +1718,7 @@ class _OverrideChecker {
         if (member.isStatic) {
           continue;
         }
-        checkMember(member.element, member);
+        checkMember(member.declaredElement, member);
       } else {
         assert(member is ConstructorDeclaration);
       }
@@ -1935,7 +1935,18 @@ class _TopLevelInitializerValidator extends RecursiveAstVisitor<Null> {
   final CodeChecker _codeChecker;
   final String _name;
 
-  _TopLevelInitializerValidator(this._codeChecker, this._name);
+  /// A flag indicating whether certain diagnostics related to top-level
+  /// elements should be produced. The diagnostics are the ones introduced by
+  /// the analyzer to signal to users when the version of type inference
+  /// performed by the analyzer was unable to accurately infer type information.
+  /// The implementation of type inference used by the task model still has
+  /// these deficiencies, but the implementation used by the driver does not.
+  // TODO(brianwilkerson) Remove this field when the task model has been
+  // removed.
+  final bool flagTopLevel;
+
+  _TopLevelInitializerValidator(this._codeChecker, this._name,
+      {this.flagTopLevel = true});
 
   void validateHasType(AstNode n, PropertyAccessorElement e) {
     if (e.hasImplicitReturnType) {
@@ -1968,7 +1979,7 @@ class _TopLevelInitializerValidator extends RecursiveAstVisitor<Null> {
       if (e is PropertyAccessorElement) {
         if (e.isStatic) {
           validateHasType(n, e);
-        } else if (e.hasImplicitReturnType) {
+        } else if (e.hasImplicitReturnType && flagTopLevel) {
           _codeChecker._recordMessage(
               n, StrongModeCode.TOP_LEVEL_INSTANCE_GETTER, [_name, e.name]);
         }
@@ -1976,7 +1987,7 @@ class _TopLevelInitializerValidator extends RecursiveAstVisitor<Null> {
           e is ExecutableElement &&
           e.kind == ElementKind.METHOD &&
           !e.isStatic) {
-        if (_hasAnyImplicitType(e)) {
+        if (_hasAnyImplicitType(e) && flagTopLevel) {
           _codeChecker._recordMessage(
               n, StrongModeCode.TOP_LEVEL_INSTANCE_METHOD, [_name, e.name]);
         }
@@ -2080,14 +2091,16 @@ class _TopLevelInitializerValidator extends RecursiveAstVisitor<Null> {
     if (method is ExecutableElement) {
       if (method.kind == ElementKind.METHOD &&
           !method.isStatic &&
-          method.hasImplicitReturnType) {
+          method.hasImplicitReturnType &&
+          flagTopLevel) {
         _codeChecker._recordMessage(node,
             StrongModeCode.TOP_LEVEL_INSTANCE_METHOD, [_name, method.name]);
       }
       if (node.typeArguments == null && method.typeParameters.isNotEmpty) {
         if (method.kind == ElementKind.METHOD &&
             !method.isStatic &&
-            _anyParameterHasImplicitType(method)) {
+            _anyParameterHasImplicitType(method) &&
+            flagTopLevel) {
           _codeChecker._recordMessage(node,
               StrongModeCode.TOP_LEVEL_INSTANCE_METHOD, [_name, method.name]);
         }

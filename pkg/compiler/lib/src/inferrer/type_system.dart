@@ -2,6 +2,7 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import 'package:kernel/ast.dart' as ir;
 import '../common.dart';
 import '../elements/entities.dart';
 import '../elements/types.dart';
@@ -12,7 +13,7 @@ import 'type_graph_nodes.dart';
 
 /// Strategy for creating type information from members and parameters and type
 /// information for nodes.
-abstract class TypeSystemStrategy<T> {
+abstract class TypeSystemStrategy {
   /// Creates [MemberTypeInformation] for [member].
   MemberTypeInformation createMemberTypeInformation(
       AbstractValueDomain abstractValueDomain, MemberEntity member);
@@ -21,22 +22,22 @@ abstract class TypeSystemStrategy<T> {
   ParameterTypeInformation createParameterTypeInformation(
       AbstractValueDomain abstractValueDomain,
       Local parameter,
-      TypeSystem<T> types);
+      TypeSystem types);
 
   /// Calls [f] for each parameter in [function].
   void forEachParameter(FunctionEntity function, void f(Local parameter));
 
   /// Returns whether [node] is valid as a general phi node.
-  bool checkPhiNode(T node);
+  bool checkPhiNode(ir.Node node);
 
   /// Returns whether [node] is valid as a loop phi node.
-  bool checkLoopPhiNode(T node);
+  bool checkLoopPhiNode(ir.Node node);
 
   /// Returns whether [node] is valid as a list allocation node.
-  bool checkListNode(T node);
+  bool checkListNode(ir.Node node);
 
   /// Returns whether [node] is valid as a map allocation node.
-  bool checkMapNode(T node);
+  bool checkMapNode(ir.Node node);
 
   /// Returns whether [cls] is valid as a type mask base class.
   bool checkClassEntity(ClassEntity cls);
@@ -45,27 +46,29 @@ abstract class TypeSystemStrategy<T> {
 /**
  * The class [SimpleInferrerVisitor] will use when working on types.
  */
-class TypeSystem<T> {
+class TypeSystem {
   final JClosedWorld _closedWorld;
-  final TypeSystemStrategy<T> strategy;
+  final TypeSystemStrategy strategy;
 
   /// [parameterTypeInformations] and [memberTypeInformations] ordered by
   /// creation time. This is used as the inference enqueueing order.
   final List<TypeInformation> _orderedTypeInformations = <TypeInformation>[];
 
   /// [ParameterTypeInformation]s for parameters.
-  final Map<Local, TypeInformation> parameterTypeInformations =
-      new Map<Local, TypeInformation>();
+  final Map<Local, ParameterTypeInformation> parameterTypeInformations =
+      new Map<Local, ParameterTypeInformation>();
 
   /// [MemberTypeInformation]s for members.
-  final Map<MemberEntity, TypeInformation> memberTypeInformations =
-      new Map<MemberEntity, TypeInformation>();
+  final Map<MemberEntity, MemberTypeInformation> memberTypeInformations =
+      new Map<MemberEntity, MemberTypeInformation>();
 
   /// [ListTypeInformation] for allocated lists.
-  final Map<T, TypeInformation> allocatedLists = new Map<T, TypeInformation>();
+  final Map<ir.Node, ListTypeInformation> allocatedLists =
+      new Map<ir.Node, ListTypeInformation>();
 
   /// [MapTypeInformation] for allocated Maps.
-  final Map<T, TypeInformation> allocatedMaps = new Map<T, TypeInformation>();
+  final Map<ir.Node, TypeInformation> allocatedMaps =
+      new Map<ir.Node, TypeInformation>();
 
   /// Closures found during the analysis.
   final Set<TypeInformation> allocatedClosures = new Set<TypeInformation>();
@@ -395,10 +398,20 @@ class TypeSystem<T> {
     });
   }
 
+  void forEachParameterType(
+      void f(Local parameter, ParameterTypeInformation typeInformation)) {
+    parameterTypeInformations.forEach(f);
+  }
+
   MemberTypeInformation getInferredTypeOfMember(MemberEntity member) {
     assert(!member.isAbstract,
         failedAt(member, "Unexpected abstract member $member."));
     return memberTypeInformations[member] ??= _getInferredTypeOfMember(member);
+  }
+
+  void forEachMemberType(
+      void f(MemberEntity member, MemberTypeInformation typeInformation)) {
+    memberTypeInformations.forEach(f);
   }
 
   MemberTypeInformation _getInferredTypeOfMember(MemberEntity member) {
@@ -453,12 +466,12 @@ class TypeSystem<T> {
   }
 
   TypeInformation allocateList(
-      TypeInformation type, T node, MemberEntity enclosing,
+      TypeInformation type, ir.Node node, MemberEntity enclosing,
       [TypeInformation elementType, int length]) {
     assert(strategy.checkListNode(node));
     ClassEntity typedDataClass = _closedWorld.commonElements.typedDataClass;
     bool isTypedArray = typedDataClass != null &&
-        _closedWorld.isInstantiated(typedDataClass) &&
+        _closedWorld.classHierarchy.isInstantiated(typedDataClass) &&
         _abstractValueDomain.isInstanceOfOrNull(type.type, typedDataClass);
     bool isConst = (type.type == _abstractValueDomain.constListType);
     bool isFixed = (type.type == _abstractValueDomain.fixedListType) ||
@@ -492,7 +505,7 @@ class TypeSystem<T> {
   }
 
   TypeInformation allocateMap(
-      ConcreteTypeInformation type, T node, MemberEntity element,
+      ConcreteTypeInformation type, ir.Node node, MemberEntity element,
       [List<TypeInformation> keyTypes, List<TypeInformation> valueTypes]) {
     assert(strategy.checkMapNode(node));
     assert(keyTypes.length == valueTypes.length);
@@ -546,7 +559,7 @@ class TypeSystem<T> {
    */
   TypeInformation allocateDiamondPhi(
       TypeInformation firstInput, TypeInformation secondInput) {
-    PhiElementTypeInformation<T> result = new PhiElementTypeInformation<T>(
+    PhiElementTypeInformation result = new PhiElementTypeInformation(
         _abstractValueDomain, currentMember, null, null,
         isTry: false);
     result.addAssignment(firstInput);
@@ -555,9 +568,9 @@ class TypeSystem<T> {
     return result;
   }
 
-  PhiElementTypeInformation<T> _addPhi(
-      T node, Local variable, TypeInformation inputType, bool isTry) {
-    PhiElementTypeInformation<T> result = new PhiElementTypeInformation<T>(
+  PhiElementTypeInformation _addPhi(
+      ir.Node node, Local variable, TypeInformation inputType, bool isTry) {
+    PhiElementTypeInformation result = new PhiElementTypeInformation(
         _abstractValueDomain, currentMember, node, variable,
         isTry: isTry);
     allocatedTypes.add(result);
@@ -569,8 +582,8 @@ class TypeSystem<T> {
    * Returns a new type for holding the potential types of [element].
    * [inputType] is the first incoming type of the phi.
    */
-  PhiElementTypeInformation<T> allocatePhi(
-      T node, Local variable, TypeInformation inputType,
+  PhiElementTypeInformation allocatePhi(
+      ir.Node node, Local variable, TypeInformation inputType,
       {bool isTry}) {
     assert(strategy.checkPhiNode(node));
     // Check if [inputType] is a phi for a local updated in
@@ -591,8 +604,8 @@ class TypeSystem<T> {
    * implementation of [TypeSystem] to differentiate Phi nodes due to loops
    * from other merging uses.
    */
-  PhiElementTypeInformation<T> allocateLoopPhi(
-      T node, Local variable, TypeInformation inputType,
+  PhiElementTypeInformation allocateLoopPhi(
+      ir.Node node, Local variable, TypeInformation inputType,
       {bool isTry}) {
     assert(strategy.checkLoopPhiNode(node));
     return _addPhi(node, variable, inputType, isTry);
@@ -605,7 +618,7 @@ class TypeSystem<T> {
    * input type.
    */
   TypeInformation simplifyPhi(
-      T node, Local variable, PhiElementTypeInformation<T> phiType) {
+      ir.Node node, Local variable, PhiElementTypeInformation phiType) {
     assert(phiType.branchNode == node);
     if (phiType.assignments.length == 1) return phiType.assignments.first;
     return phiType;
@@ -614,8 +627,8 @@ class TypeSystem<T> {
   /**
    * Adds [newType] as an input of [phiType].
    */
-  PhiElementTypeInformation<T> addPhiInput(Local variable,
-      PhiElementTypeInformation<T> phiType, TypeInformation newType) {
+  PhiElementTypeInformation addPhiInput(Local variable,
+      PhiElementTypeInformation phiType, TypeInformation newType) {
     phiType.addAssignment(newType);
     return phiType;
   }

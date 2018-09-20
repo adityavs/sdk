@@ -95,6 +95,60 @@ static void CollectFinalizedSuperClasses(
   }
 }
 
+class InterfaceFinder {
+ public:
+  InterfaceFinder(Zone* zone,
+                  ClassTable* class_table,
+                  GrowableArray<intptr_t>* cids)
+      : class_table_(class_table),
+        array_handles_(zone),
+        class_handles_(zone),
+        type_handles_(zone),
+        cids_(cids) {}
+
+  void FindAllInterfaces(const Class& klass) {
+    // The class is implementing it's own interface.
+    cids_->Add(klass.id());
+
+    ScopedHandle<Array> array(&array_handles_);
+    ScopedHandle<Class> interface_class(&class_handles_);
+    ScopedHandle<Class> current_class(&class_handles_);
+    ScopedHandle<AbstractType> type(&type_handles_);
+
+    *current_class = klass.raw();
+    while (true) {
+      // We don't care about top types.
+      const intptr_t cid = current_class->id();
+      if (cid == kObjectCid || cid == kDynamicCid || cid == kVoidCid) {
+        break;
+      }
+
+      // The class is implementing it's directly declared implemented
+      // interfaces.
+      *array = klass.interfaces();
+      if (!array->IsNull()) {
+        for (intptr_t i = 0; i < array->Length(); ++i) {
+          *type ^= array->At(i);
+          *interface_class ^= class_table_->At(type->type_class_id());
+          FindAllInterfaces(*interface_class);
+        }
+      }
+
+      // The class is implementing it's super type's interfaces.
+      *type = current_class->super_type();
+      if (type->IsNull()) break;
+      *current_class = class_table_->At(type->type_class_id());
+    }
+  }
+
+ private:
+  ClassTable* class_table_;
+  ReusableHandleStack<Array> array_handles_;
+  ReusableHandleStack<Class> class_handles_;
+  ReusableHandleStack<AbstractType> type_handles_;
+  GrowableArray<intptr_t>* cids_;
+};
+
 static void CollectImmediateSuperInterfaces(const Class& cls,
                                             GrowableArray<intptr_t>* cids) {
   const Array& interfaces = Array::Handle(cls.interfaces());
@@ -395,8 +449,7 @@ void ClassFinalizer::ResolveRedirectingFactoryTarget(
     return;
   }
 
-  Isolate* isolate = Isolate::Current();
-  if (isolate->error_on_bad_override() && !isolate->strong()) {
+  if (!FLAG_strong && Isolate::Current()->error_on_bad_override()) {
     // Verify that the target is compatible with the redirecting factory.
     Error& error = Error::Handle();
     if (!target.HasCompatibleParametersWith(factory, &error)) {
@@ -510,7 +563,7 @@ void ClassFinalizer::ResolveTypeClass(const Class& cls, const Type& type) {
          (type.signature() != Function::null()));
 
   // In non-strong mode, replace FutureOr<T> type of async library with dynamic.
-  if (type_class.IsFutureOrClass() && !Isolate::Current()->strong()) {
+  if (type_class.IsFutureOrClass() && !FLAG_strong) {
     Type::Cast(type).set_type_class(Class::Handle(Object::dynamic_class()));
     type.set_arguments(Object::null_type_arguments());
   }
@@ -1172,7 +1225,7 @@ RawAbstractType* ClassFinalizer::FinalizeType(const Class& cls,
     // malformed.
     if ((finalization >= kCanonicalize) && !type.IsMalformed() &&
         !type.IsCanonical() && type.IsType()) {
-      if (!Isolate::Current()->strong()) {
+      if (!FLAG_strong) {
         CheckTypeBounds(cls, type);
       }
       return type.Canonicalize();
@@ -1316,7 +1369,7 @@ RawAbstractType* ClassFinalizer::FinalizeType(const Class& cls,
 
   // If we are done finalizing a graph of mutually recursive types, check their
   // bounds.
-  if (is_root_type && !Isolate::Current()->strong()) {
+  if (is_root_type && !FLAG_strong) {
     for (intptr_t i = pending_types->length() - 1; i >= 0; i--) {
       const AbstractType& type = pending_types->At(i);
       if (!type.IsMalformed() && !type.IsCanonical()) {
@@ -1528,6 +1581,25 @@ void ClassFinalizer::FinalizeUpperBounds(const Class& cls,
   }
 }
 
+#if defined(TARGET_ARCH_X64)
+static bool IsPotentialExactGeneric(const AbstractType& type) {
+  // TODO(dartbug.com/34170) Investigate supporting this for fields with types
+  // that depend on type parameters of the enclosing class.
+  if (type.IsType() && !type.IsFunctionType() && !type.IsDartFunctionType() &&
+      type.IsInstantiated()) {
+    const Class& cls = Class::Handle(type.type_class());
+    return cls.IsGeneric() && !cls.IsFutureOrClass();
+  }
+
+  return false;
+}
+#else
+// TODO(dartbug.com/34170) Support other architectures.
+static bool IsPotentialExactGeneric(const AbstractType& type) {
+  return false;
+}
+#endif
+
 void ClassFinalizer::ResolveAndFinalizeMemberTypes(const Class& cls) {
   // Note that getters and setters are explicitly listed as such in the list of
   // functions of a class, so we do not need to consider fields as implicitly
@@ -1551,6 +1623,7 @@ void ClassFinalizer::ResolveAndFinalizeMemberTypes(const Class& cls) {
   //   instance method.
 
   // Resolve type of fields and check for conflicts in super classes.
+  Isolate* isolate = Isolate::Current();
   Zone* zone = Thread::Current()->zone();
   Array& array = Array::Handle(zone, cls.fields());
   Field& field = Field::Handle(zone);
@@ -1560,11 +1633,16 @@ void ClassFinalizer::ResolveAndFinalizeMemberTypes(const Class& cls) {
   String& other_name = String::Handle(zone);
   Class& super_class = Class::Handle(zone);
   const intptr_t num_fields = array.Length();
+  const bool track_exactness = FLAG_strong && isolate->use_field_guards();
   for (intptr_t i = 0; i < num_fields; i++) {
     field ^= array.At(i);
     type = field.type();
     type = FinalizeType(cls, type);
     field.SetFieldType(type);
+    if (track_exactness && IsPotentialExactGeneric(type)) {
+      field.set_static_type_exactness_state(
+          StaticTypeExactnessState::Unitialized());
+    }
     name = field.name();
     if (field.is_static()) {
       getter_name = Field::GetterSymbol(name);
@@ -1622,7 +1700,7 @@ void ClassFinalizer::ResolveAndFinalizeMemberTypes(const Class& cls) {
           (!type.IsDynamicType() &&
            !const_value.IsInstanceOf(type, Object::null_type_arguments(),
                                      Object::null_type_arguments(), &error))) {
-        if (Isolate::Current()->error_on_bad_type()) {
+        if (isolate->error_on_bad_type()) {
           const AbstractType& const_value_type =
               AbstractType::Handle(zone, const_value.GetType(Heap::kNew));
           const String& const_value_type_name =
@@ -1664,8 +1742,7 @@ void ClassFinalizer::ResolveAndFinalizeMemberTypes(const Class& cls) {
   // If we check for bad overrides, collect interfaces, super interfaces, and
   // super classes of this class.
   GrowableArray<const Class*> interfaces(zone, 4);
-  Isolate* isolate = Isolate::Current();
-  if (isolate->error_on_bad_override() && !isolate->strong()) {
+  if (isolate->error_on_bad_override() && !FLAG_strong) {
     CollectInterfaces(cls, &interfaces);
     // Include superclasses in list of interfaces and super interfaces.
     super_class = cls.SuperClass();
@@ -1687,7 +1764,7 @@ void ClassFinalizer::ResolveAndFinalizeMemberTypes(const Class& cls) {
     FinalizeSignature(cls, function);
     name = function.name();
     // Report signature conflicts only.
-    if (isolate->error_on_bad_override() && !isolate->strong() &&
+    if (isolate->error_on_bad_override() && !FLAG_strong &&
         !function.is_static() && !function.IsGenerativeConstructor()) {
       // A constructor cannot override anything.
       for (intptr_t i = 0; i < interfaces.length(); i++) {
@@ -2609,12 +2686,37 @@ void ClassFinalizer::FinalizeTypesInClass(const Class& cls) {
   // Mark as type finalized before resolving type parameter upper bounds
   // in order to break cycles.
   cls.set_is_type_finalized();
+
   // Add this class to the direct subclasses of the superclass, unless the
   // superclass is Object.
   if (!super_type.IsNull() && !super_type.IsObjectType()) {
     ASSERT(!super_class.IsNull());
     super_class.AddDirectSubclass(cls);
   }
+
+  // Add this class as an implementor to the implemented interface's type
+  // classes.
+  Zone* zone = thread->zone();
+  auto& interface_class = Class::Handle(zone);
+  for (intptr_t i = 0; i < interface_types.Length(); ++i) {
+    interface_type ^= interface_types.At(i);
+    interface_class = interface_type.type_class();
+    interface_class.AddDirectImplementor(cls);
+  }
+
+  if (FLAG_use_cha_deopt) {
+    // Invalidate all CHA code which depends on knowing the implementors of any
+    // of the interfaces implemented by this new class.
+    ClassTable* class_table = thread->isolate()->class_table();
+    GrowableArray<intptr_t> cids;
+    InterfaceFinder finder(zone, class_table, &cids);
+    finder.FindAllInterfaces(cls);
+    for (intptr_t j = 0; j < cids.length(); ++j) {
+      interface_class = class_table->At(cids[j]);
+      interface_class.DisableCHAImplementorUsers();
+    }
+  }
+
   // A top level class is parsed eagerly so just finalize it.
   if (cls.IsTopLevel()) {
     FinalizeClass(cls);
@@ -2645,16 +2747,24 @@ void ClassFinalizer::FinalizeTypesInClass(const Class& cls) {
   }
 }
 
+volatile int ctr = 0;
+
 void ClassFinalizer::FinalizeClass(const Class& cls) {
   Thread* thread = Thread::Current();
   HANDLESCOPE(thread);
   ASSERT(cls.is_type_finalized());
+  if (strstr(cls.ToCString(), "AssertionError")) ++ctr;
   if (cls.is_finalized()) {
     return;
   }
   if (FLAG_trace_class_finalization) {
     THR_Print("Finalize %s\n", cls.ToCString());
   }
+
+#if !defined(PRODUCT)
+  TimelineDurationScope tds(thread, Timeline::GetCompilerStream(),
+                            "ClassFinalizer::FinalizeClass");
+#endif  // !defined(PRODUCT)
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
   // If loading from a kernel, make sure that the class is fully loaded.
@@ -2679,7 +2789,7 @@ void ClassFinalizer::FinalizeClass(const Class& cls) {
   }
   // Ensure interfaces are finalized in case we check for bad overrides.
   Isolate* isolate = Isolate::Current();
-  if (isolate->error_on_bad_override() && !isolate->strong()) {
+  if (isolate->error_on_bad_override() && !FLAG_strong) {
     GrowableArray<const Class*> interfaces(4);
     CollectInterfaces(cls, &interfaces);
     for (intptr_t i = 0; i < interfaces.length(); i++) {
@@ -2693,6 +2803,7 @@ void ClassFinalizer::FinalizeClass(const Class& cls) {
     ApplyMixinMembers(cls);
   }
   // Mark as parsed and finalized.
+  if (strstr(cls.ToCString(), "AssertionError")) ++ctr;
   cls.Finalize();
   // Mixin app alias classes may still lack their forwarding constructor.
   if (cls.is_mixin_app_alias() &&

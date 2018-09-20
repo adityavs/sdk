@@ -48,6 +48,9 @@ constexpr bool kDartPrecompiledRuntime = false;
 //   D(name, type, default_value, comment)
 //   C(name, precompiled_value, product_value, type, default_value, comment)
 #define FLAG_LIST(P, R, D, C)                                                  \
+  P(experimental_unsafe_mode_use_at_your_own_risk, bool, false,                \
+    "Omit runtime strong mode type checks and disable optimizations based on " \
+    "types.")                                                                  \
   P(abort_on_oom, bool, false,                                                 \
     "Abort if memory allocation fails - use only with --old-gen-heap-size")    \
   C(async_debugger, false, false, bool, true,                                  \
@@ -153,13 +156,13 @@ constexpr bool kDartPrecompiledRuntime = false;
   R(profiler, false, bool, false, "Enable the profiler.")                      \
   R(profiler_native_memory, false, bool, false,                                \
     "Enable native memory statistic collection.")                              \
-  P(reify_generic_functions, bool, false,                                      \
+  P(reify_generic_functions, bool, true,                                       \
     "Enable reification of generic functions (not yet supported).")            \
   P(reorder_basic_blocks, bool, true, "Reorder basic blocks")                  \
   C(stress_async_stacks, false, false, bool, false,                            \
     "Stress test async stack traces")                                          \
-  P(strong, bool, false, "Enable strong mode.")                                \
-  P(sync_async, bool, false, "Start `async` functions synchronously.")         \
+  P(strong, bool, true, "Enable strong mode.")                                 \
+  P(sync_async, bool, true, "Start `async` functions synchronously.")          \
   R(support_ast_printer, false, bool, true, "Support the AST printer.")        \
   R(support_compiler_stats, false, bool, true, "Support compiler stats.")      \
   R(support_disassembler, false, bool, true, "Support the disassembler.")      \
@@ -168,7 +171,7 @@ constexpr bool kDartPrecompiledRuntime = false;
   R(support_service, false, bool, true, "Support the service protocol.")       \
   R(support_timeline, false, bool, true, "Support timeline.")                  \
   D(trace_cha, bool, false, "Trace CHA operations")                            \
-  D(trace_field_guards, bool, false, "Trace changes in field's cids.")         \
+  R(trace_field_guards, false, bool, false, "Trace changes in field's cids.")  \
   C(trace_irregexp, false, false, bool, false, "Trace irregexps.")             \
   D(trace_isolates, bool, false, "Trace isolate creation and shut down.")      \
   D(trace_handles, bool, false, "Traces allocation of handles.")               \
@@ -182,6 +185,7 @@ constexpr bool kDartPrecompiledRuntime = false;
   D(trace_zones, bool, false, "Traces allocation sizes in the zone.")          \
   P(truncating_left_shift, bool, true,                                         \
     "Optimize left shift to truncate if possible")                             \
+  C(use_bytecode_compiler, false, false, bool, false, "Compile from bytecode") \
   P(use_compactor, bool, false, "Compact the heap during old-space GC.")       \
   P(use_cha_deopt, bool, true,                                                 \
     "Use class hierarchy analysis even if it can cause deoptimization.")       \
@@ -200,6 +204,13 @@ constexpr bool kDartPrecompiledRuntime = false;
   D(verify_on_transition, bool, false, "Verify on dart <==> VM.")              \
   P(enable_slow_path_sharing, bool, true, "Enable sharing of slow-path code.") \
   P(shared_slow_path_triggers_gc, bool, false,                                 \
-    "TESTING: slow-path triggers a GC.")
+    "TESTING: slow-path triggers a GC.")                                       \
+  P(enable_multiple_entrypoints, bool, false,                                  \
+    "Enable multiple entrypoints per-function and related optimizations.")     \
+  R(enable_testing_pragmas, false, bool, false,                                \
+    "Enable magical pragmas for testing purposes. Use at your own risk!")      \
+  R(eliminate_type_checks, true, bool, true,                                   \
+    "Eliminate type checks when allowed by static type analysis.")             \
+  P(enable_interpreter, bool, false, "Enable interpreting kernel bytecode.")
 
 #endif  // RUNTIME_VM_FLAG_LIST_H_

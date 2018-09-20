@@ -252,7 +252,7 @@ class _ConstantEvaluator extends ConstantEvaluator {
         if (value != null) return canonicalize(StringConstant(value));
         return defaultArg ?? nullConstant;
       } else if (targetClass == coreTypes.intClass) {
-        var intValue = int.parse(value ?? '', onError: (_) => null);
+        var intValue = int.tryParse(value ?? '');
         if (intValue != null) return canonicalize(IntConstant(intValue));
         return defaultArg ?? nullConstant;
       } else if (targetClass == coreTypes.boolClass) {
@@ -302,14 +302,6 @@ class _ConstantsBackend implements ConstantsBackend {
   buildConstantForNative(
           nativeName, typeArguments, positionalArguments, namedArguments) =>
       throw StateError('unreachable'); // DDC does not use VM native syntax
-
-  @override
-  buildSymbolConstant(StringConstant value) {
-    return InstanceConstant(
-        coreTypes.internalSymbolClass.reference,
-        const <DartType>[],
-        <Reference, Constant>{symbolNameField.reference: value});
-  }
 
   @override
   lowerMapConstant(constant) => constant;

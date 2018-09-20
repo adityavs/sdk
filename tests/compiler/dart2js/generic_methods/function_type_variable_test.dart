@@ -3,11 +3,10 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import 'package:async_helper/async_helper.dart';
-import 'package:compiler/src/commandline_options.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/elements/types.dart';
 import 'package:expect/expect.dart';
-import '../type_test_helper.dart';
+import '../helpers/type_test_helper.dart';
 
 const List<FunctionTypeData> existentialTypeData = const <FunctionTypeData>[
   const FunctionTypeData('void', 'F1', '<T>(T t)'),
@@ -24,8 +23,8 @@ const List<FunctionTypeData> existentialTypeData = const <FunctionTypeData>[
 
 main() {
   asyncTest(() async {
-    var env = await TypeEnvironment
-        .create(createTypedefs(existentialTypeData, additionalData: """
+    var env = await TypeEnvironment.create(
+        createTypedefs(existentialTypeData, additionalData: """
     class C1 {}
     class C2 {}
     class C3<T> {
@@ -39,7 +38,21 @@ main() {
     }
     void F11<Q extends C3<Q>>(Q q) {}
     void F12<P extends C3<P>>(P p) {}
-  """), options: [Flags.strongMode]);
+
+    main() {
+      ${createUses(existentialTypeData)}
+      
+      new C1();
+      new C2();
+      new C3.fact();
+      new C4();
+      
+      F9(null, null);
+      F10();
+      F11(null);
+      F12(null);
+    }
+    """));
 
     testToString(FunctionType type, String expectedToString) {
       Expect.equals(expectedToString, type.toString());

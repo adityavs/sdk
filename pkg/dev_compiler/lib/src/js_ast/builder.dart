@@ -339,6 +339,7 @@ class JsBuilder {
         case "\v":
           return r"\v";
       }
+      throw 'unreachable';
     });
     LiteralString result = LiteralString('$quote$escaped$quote');
     // We don't escape quotes of a different style under the assumption that the
@@ -620,8 +621,15 @@ class MiniJsParser {
   static final ARROW_TOKEN = '=>';
   static final ELLIPSIS_TOKEN = '...';
 
-  static final OPERATORS_THAT_LOOK_LIKE_IDENTIFIERS =
-      ['typeof', 'void', 'delete', 'in', 'instanceof', 'await'].toSet();
+  static final OPERATORS_THAT_LOOK_LIKE_IDENTIFIERS = [
+    'typeof',
+    'void',
+    'delete',
+    'in',
+    'instanceof',
+    'await',
+    'extends'
+  ].toSet();
 
   static int category(int code) {
     if (code >= CATEGORIES.length) return OTHER;
@@ -699,9 +707,9 @@ class MiniJsParser {
       }
       lastCategory = NUMERIC;
       lastToken = src.substring(lastPosition, position);
-      int.parse(lastToken, onError: (_) {
+      if (int.tryParse(lastToken) == null) {
         error("Unparseable number");
-      });
+      }
     } else if (code == charCodes.$SLASH) {
       // Tokens that start with / are special due to regexp literals.
       lastCategory = SYMBOL;
@@ -731,9 +739,9 @@ class MiniJsParser {
       lastCategory = cat;
       lastToken = src.substring(lastPosition, position);
       if (cat == NUMERIC) {
-        double.parse(lastToken, (_) {
+        if (double.tryParse(lastToken) == null) {
           error("Unparseable number");
-        });
+        }
       } else if (cat == DOT && lastToken.length > 1) {
         if (lastToken == ELLIPSIS_TOKEN) {
           lastCategory = ELLIPSIS;

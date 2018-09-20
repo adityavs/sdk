@@ -153,6 +153,29 @@ class C extends B {
         selectionLength: 27);
   }
 
+  @failingTest
+  test_insideBareClass() async {
+    addTestSource('''
+class A {
+  method() {}
+  int age;
+}
+
+class B extends A {
+  ^
+}
+''');
+    await computeSuggestions();
+    _assertOverride('''
+method() {
+    // TODO: implement method
+    return super.method();
+  }''',
+        displayText: 'method() { … }',
+        selectionOffset: 45,
+        selectionLength: 22);
+  }
+
   test_withExistingOverride() async {
     addTestSource('''
 class A {
@@ -186,29 +209,6 @@ class A {
 
 class B extends A {
   @override
-  ^
-}
-''');
-    await computeSuggestions();
-    _assertOverride('''
-method() {
-    // TODO: implement method
-    return super.method();
-  }''',
-        displayText: 'method() { … }',
-        selectionOffset: 45,
-        selectionLength: 22);
-  }
-
-  @failingTest
-  test_insideBareClass() async {
-    addTestSource('''
-class A {
-  method() {}
-  int age;
-}
-
-class B extends A {
   ^
 }
 ''');

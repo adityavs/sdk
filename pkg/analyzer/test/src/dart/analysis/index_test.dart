@@ -101,6 +101,27 @@ class C2 = Object with B;
     assertThat(classElementB)..isAncestorOf('C2 = Object with B');
   }
 
+  test_hasAncestor_MixinDeclaration() async {
+    await _indexTestUnit('''
+class A {}
+class B extends A {}
+
+mixin M1 on A {}
+mixin M2 on B {}
+mixin M3 implements A {}
+mixin M4 implements B {}
+mixin M5 on M2 {}
+''');
+    ClassElement classElementA = findElement('A');
+    assertThat(classElementA)
+      ..isAncestorOf('B extends A')
+      ..isAncestorOf('M1 on A')
+      ..isAncestorOf('M2 on B')
+      ..isAncestorOf('M3 implements A')
+      ..isAncestorOf('M4 implements B')
+      ..isAncestorOf('M5 on M2');
+  }
+
   test_isExtendedBy_ClassDeclaration() async {
     await _indexTestUnit('''
 class A {} // 1
@@ -195,6 +216,28 @@ class C = Object with A implements B; // 3
     assertThat(elementB)
       ..isImplementedAt('B; // 3', false)
       ..isReferencedAt('B; // 3', false);
+  }
+
+  test_isImplementedBy_MixinDeclaration_implementsClause() async {
+    await _indexTestUnit('''
+class A {} // 1
+mixin M implements A {} // 2
+''');
+    ClassElement elementA = findElement('A');
+    assertThat(elementA)
+      ..isImplementedAt('A {} // 2', false)
+      ..isReferencedAt('A {} // 2', false);
+  }
+
+  test_isImplementedBy_MixinDeclaration_onClause() async {
+    await _indexTestUnit('''
+class A {} // 1
+mixin M on A {} // 2
+''');
+    ClassElement elementA = findElement('A');
+    assertThat(elementA)
+      ..isImplementedAt('A {} // 2', false)
+      ..isReferencedAt('A {} // 2', false);
   }
 
   test_isInvokedBy_FieldElement() async {
@@ -338,7 +381,7 @@ class A {
       ..isInvokedAt('ggg(); // nq', false);
   }
 
-  test_isMixedInBy_ClassDeclaration() async {
+  test_isMixedInBy_ClassDeclaration_class() async {
     await _indexTestUnit('''
 class A {} // 1
 class B extends Object with A {} // 2
@@ -361,9 +404,29 @@ class B extends Object with p.A {} // 2
     assertThat(elementA).isMixedInAt('A {} // 2', true);
   }
 
-  test_isMixedInBy_ClassTypeAlias() async {
+  test_isMixedInBy_ClassDeclaration_mixin() async {
+    await _indexTestUnit('''
+mixin A {} // 1
+class B extends Object with A {} // 2
+''');
+    ClassElement elementA = findElement('A');
+    assertThat(elementA)
+      ..isMixedInAt('A {} // 2', false)
+      ..isReferencedAt('A {} // 2', false);
+  }
+
+  test_isMixedInBy_ClassTypeAlias_class() async {
     await _indexTestUnit('''
 class A {} // 1
+class B = Object with A; // 2
+''');
+    ClassElement elementA = findElement('A');
+    assertThat(elementA).isMixedInAt('A; // 2', false);
+  }
+
+  test_isMixedInBy_ClassTypeAlias_mixin() async {
+    await _indexTestUnit('''
+mixin A {} // 1
 class B = Object with A; // 2
 ''');
     ClassElement elementA = findElement('A');
@@ -1016,6 +1079,35 @@ class X extends dynamic {
     expect(X.members, ['foo']);
   }
 
+  test_subtypes_mixinDeclaration() async {
+    String libP = 'package:test/lib.dart;package:test/lib.dart';
+    provider.newFile(_p('$testProject/lib.dart'), '''
+class A {}
+class B {}
+class C {}
+class D {}
+class E {}
+''');
+    await _indexTestUnit('''
+import 'lib.dart';
+
+mixin X on A implements B, C {}
+mixin Y on A, B implements C;
+''');
+
+    {
+      var X = index.subtypes.singleWhere((t) => t.name == 'X');
+      expect(X.supertypes, ['$libP;A', '$libP;B', '$libP;C']);
+      expect(X.members, isEmpty);
+    }
+
+    {
+      var Y = index.subtypes.singleWhere((t) => t.name == 'Y');
+      expect(Y.supertypes, ['$libP;A', '$libP;B', '$libP;C']);
+      expect(Y.members, isEmpty);
+    }
+  }
+
   test_usedName_inLibraryIdentifier() async {
     await _indexTestUnit('''
 library aaa.bbb.ccc;
@@ -1250,7 +1342,7 @@ main() {
 
     AnalysisResult result = await driver.getResult(testFile);
     testUnit = result.unit;
-    testUnitElement = testUnit.element;
+    testUnitElement = testUnit.declaredElement;
     testLibraryElement = testUnitElement.library;
 
     AnalysisDriverUnitIndexBuilder indexBuilder = indexUnit(testUnit);

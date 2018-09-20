@@ -28,7 +28,8 @@ Future<Uri> computeGeneratedFile() {
 
 Future<String> generateMessagesFile() async {
   Uri messagesFile = Platform.script.resolve("../../messages.yaml");
-  Map yaml = loadYaml(await new File.fromUri(messagesFile).readAsStringSync());
+  Map<dynamic, dynamic> yaml =
+      loadYaml(await new File.fromUri(messagesFile).readAsStringSync());
   StringBuffer sb = new StringBuffer();
 
   sb.writeln("""
@@ -44,18 +45,65 @@ Future<String> generateMessagesFile() async {
 part of fasta.codes;
 """);
 
+  bool hasError = false;
+  int largestIndex = 0;
+  final indexNameMap = new Map<int, String>();
+
   List<String> keys = yaml.keys.cast<String>().toList()..sort();
   for (String name in keys) {
     var description = yaml[name];
     while (description is String) {
       description = yaml[description];
     }
-    Map map = description;
+    Map<dynamic, dynamic> map = description;
     if (map == null) {
       throw "No 'template:' in key $name.";
     }
-    sb.writeln(compileTemplate(name, map['template'], map['tip'],
-        map['analyzerCode'], map['dart2jsCode'], map['severity']));
+    var index = map['index'];
+    if (index != null) {
+      if (index is! int || index < 1) {
+        print('Error: Expected positive int for "index:" field in $name,'
+            ' but found $index');
+        hasError = true;
+        index = -1;
+        // Continue looking for other problems.
+      } else {
+        String otherName = indexNameMap[index];
+        if (otherName != null) {
+          print('Error: The "index:" field must be unique, '
+              'but is the same for $otherName and $name');
+          hasError = true;
+          // Continue looking for other problems.
+        } else {
+          indexNameMap[index] = name;
+          if (largestIndex < index) {
+            largestIndex = index;
+          }
+        }
+      }
+    }
+    sb.writeln(compileTemplate(name, index, map['template'], map['tip'],
+        map['analyzerCode'], map['severity']));
+  }
+  if (largestIndex > indexNameMap.length) {
+    print('Error: The "index:" field values should be unique, consecutive'
+        ' whole numbers starting with 1.');
+    hasError = true;
+    // Fall through to print more information.
+  }
+  if (hasError) {
+    exitCode = 1;
+    print('The largest index is $largestIndex');
+    final sortedIndices = indexNameMap.keys.toList()..sort();
+    int nextAvailableIndex = largestIndex + 1;
+    for (int index = 1; index <= sortedIndices.length; ++index) {
+      if (sortedIndices[index - 1] != index) {
+        nextAvailableIndex = index;
+        break;
+      }
+    }
+    print('The next available index is ${nextAvailableIndex}');
+    return '';
   }
 
   return new DartFormatter().format("$sb");
@@ -64,8 +112,8 @@ part of fasta.codes;
 final RegExp placeholderPattern =
     new RegExp("#\([-a-zA-Z0-9_]+\)(?:%\([0-9]*\)\.\([0-9]+\))?");
 
-String compileTemplate(String name, String template, String tip,
-    String analyzerCode, String dart2jsCode, String severity) {
+String compileTemplate(String name, int index, String template, String tip,
+    String analyzerCode, String severity) {
   if (template == null) {
     print('Error: missing template for message: $name');
     exitCode = 1;
@@ -78,6 +126,15 @@ String compileTemplate(String name, String template, String tip,
   var parameters = new Set<String>();
   var conversions = new Set<String>();
   var arguments = new Set<String>();
+  bool hasNameSystem = false;
+  void ensureNameSystem() {
+    if (hasNameSystem) return;
+    conversions.add(r"""
+NameSystem nameSystem = new NameSystem();
+StringBuffer buffer;""");
+    hasNameSystem = true;
+  }
+
   for (Match match in placeholderPattern.allMatches("$template${tip ?? ''}")) {
     String name = match[1];
     String padding = match[2];
@@ -160,9 +217,9 @@ String compileTemplate(String name, String template, String tip,
 
       case "type":
         parameters.add("DartType _type");
+        ensureNameSystem();
         conversions.add(r"""
-NameSystem nameSystem = new NameSystem();
-StringBuffer buffer = new StringBuffer();
+buffer = new StringBuffer();
 new Printer(buffer, syntheticNames: nameSystem).writeNode(_type);
 String type = '$buffer';
 """);
@@ -171,6 +228,7 @@ String type = '$buffer';
 
       case "type2":
         parameters.add("DartType _type2");
+        ensureNameSystem();
         conversions.add(r"""
 buffer = new StringBuffer();
 new Printer(buffer, syntheticNames: nameSystem).writeNode(_type2);
@@ -208,8 +266,16 @@ String type2 = '$buffer';
         break;
 
       case "constant":
-        parameters.add("Constant constant");
-        arguments.add("'constant': constant");
+        parameters.add("Constant _constant");
+        ensureNameSystem();
+        conversions.add(r"""
+buffer = new StringBuffer();
+new Printer(buffer, syntheticNames: nameSystem).writeNode(_constant);
+String constant = '$buffer';
+""");
+
+        arguments.add("'constant': _constant");
+
         break;
 
       case "num1":
@@ -243,11 +309,12 @@ String type2 = '$buffer';
   }
 
   List<String> codeArguments = <String>[];
-  if (analyzerCode != null) {
+  if (index != null) {
+    codeArguments.add('index: $index');
+  } else if (analyzerCode != null) {
+    // If "index:" is defined, then "analyzerCode:" should not be generated
+    // in the front end. See comment in messages.yaml
     codeArguments.add('analyzerCode: "$analyzerCode"');
-  }
-  if (dart2jsCode != null) {
-    codeArguments.add('dart2jsCode: "$dart2jsCode"');
   }
   if (severity != null) {
     String severityEnumName = severityEnumNames[severity];

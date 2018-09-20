@@ -206,6 +206,12 @@ class BinaryBuilder {
         return new DoubleConstant(readDouble());
       case ConstantTag.StringConstant:
         return new StringConstant(readStringReference());
+      case ConstantTag.SymbolConstant:
+        Reference libraryReference;
+        if (readAndCheckOptionTag()) {
+          libraryReference = readLibraryReference();
+        }
+        return new SymbolConstant(readStringReference(), libraryReference);
       case ConstantTag.MapConstant:
         final DartType keyType = readDartType();
         final DartType valueType = readDartType();
@@ -867,7 +873,11 @@ class BinaryBuilder {
     node.annotations = readAnnotationList(node);
     readAndPushTypeParameterList(node.typeParameters, node);
     var type = readDartType();
+    readAndPushTypeParameterList(node.typeParametersOfFunctionType, node);
+    node.positionalParameters.addAll(readAndPushVariableDeclarationList());
+    node.namedParameters.addAll(readAndPushVariableDeclarationList());
     typeParameterStack.length = 0;
+    variableStack.length = 0;
     if (shouldWriteData) {
       node.fileOffset = fileOffset;
       node.name = name;
@@ -1166,13 +1176,17 @@ class BinaryBuilder {
         return new FieldInitializer.byReference(reference, value)
           ..isSynthetic = isSynthetic;
       case Tag.SuperInitializer:
+        int offset = readOffset();
         var reference = readMemberReference();
         var arguments = readArguments();
         return new SuperInitializer.byReference(reference, arguments)
-          ..isSynthetic = isSynthetic;
+          ..isSynthetic = isSynthetic
+          ..fileOffset = offset;
       case Tag.RedirectingInitializer:
+        int offset = readOffset();
         return new RedirectingInitializer.byReference(
-            readMemberReference(), readArguments());
+            readMemberReference(), readArguments())
+          ..fileOffset = offset;
       case Tag.LocalInitializer:
         return new LocalInitializer(readAndPushVariableDeclaration());
       case Tag.AssertInitializer:
@@ -1521,28 +1535,6 @@ class BinaryBuilder {
         var expression = readExpression();
         var typeArguments = readDartTypeList();
         return new Instantiation(expression, typeArguments);
-      case Tag.VectorCreation:
-        var length = readUInt();
-        return new VectorCreation(length);
-      case Tag.VectorGet:
-        var vectorExpression = readExpression();
-        var index = readUInt();
-        return new VectorGet(vectorExpression, index);
-      case Tag.VectorSet:
-        var vectorExpression = readExpression();
-        var index = readUInt();
-        var value = readExpression();
-        return new VectorSet(vectorExpression, index, value);
-      case Tag.VectorCopy:
-        var vectorExpression = readExpression();
-        return new VectorCopy(vectorExpression);
-      case Tag.ClosureCreation:
-        var topLevelFunctionReference = readMemberReference();
-        var contextVector = readExpression();
-        var functionType = readDartType();
-        var typeArgs = readDartTypeList();
-        return new ClosureCreation.byReference(
-            topLevelFunctionReference, contextVector, functionType, typeArgs);
       case Tag.ConstantExpression:
         return new ConstantExpression(readConstantReference());
       default:
@@ -1801,8 +1793,6 @@ class BinaryBuilder {
       case Tag.TypedefType:
         return new TypedefType.byReference(
             readTypedefReference(), readDartTypeList());
-      case Tag.VectorType:
-        return const VectorType();
       case Tag.BottomType:
         return const BottomType();
       case Tag.InvalidType:
@@ -1824,7 +1814,6 @@ class BinaryBuilder {
         var totalParameterCount = readUInt();
         var positional = readDartTypeList();
         var named = readNamedTypeList();
-        var positionalNames = readStringReferenceList();
         var typedefReference = readTypedefReference();
         assert(positional.length + named.length == totalParameterCount);
         var returnType = readDartType();
@@ -1833,14 +1822,11 @@ class BinaryBuilder {
             typeParameters: typeParameters,
             requiredParameterCount: requiredParameterCount,
             namedParameters: named,
-            positionalParameterNames: positionalNames,
             typedefReference: typedefReference);
       case Tag.SimpleFunctionType:
         var positional = readDartTypeList();
-        var positionalNames = readStringReferenceList();
         var returnType = readDartType();
-        return new FunctionType(positional, returnType,
-            positionalParameterNames: positionalNames);
+        return new FunctionType(positional, returnType);
       case Tag.TypeParameterType:
         int index = readUInt();
         var bound = readDartTypeOption();
@@ -1939,6 +1925,7 @@ class BinaryBuilder {
         var annotation = annotations[i];
         annotation.parent = node;
       }
+      node.annotations = annotations;
     }
     return node;
   }

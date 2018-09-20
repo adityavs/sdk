@@ -12,6 +12,7 @@ import 'package:analysis_server/src/services/refactoring/extract_method.dart';
 import 'package:analysis_server/src/services/refactoring/extract_widget.dart';
 import 'package:analysis_server/src/services/refactoring/inline_local.dart';
 import 'package:analysis_server/src/services/refactoring/inline_method.dart';
+import 'package:analysis_server/src/services/refactoring/move_file.dart';
 import 'package:analysis_server/src/services/refactoring/rename_class_member.dart';
 import 'package:analysis_server/src/services/refactoring/rename_constructor.dart';
 import 'package:analysis_server/src/services/refactoring/rename_import.dart';
@@ -24,8 +25,10 @@ import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/analysis/session.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/dart/analysis/driver.dart';
 import 'package:analyzer/src/dart/element/ast_provider.dart';
+import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer_plugin/protocol/protocol_common.dart'
     show RefactoringMethodParameter, SourceChange;
 
@@ -337,6 +340,25 @@ abstract class InlineMethodRefactoring implements Refactoring {
 }
 
 /**
+ * [Refactoring] to move/rename a file.
+ */
+abstract class MoveFileRefactoring implements Refactoring {
+  /**
+   * Returns a new [MoveFileRefactoring] instance.
+   */
+  factory MoveFileRefactoring(ResourceProvider resourceProvider,
+      RefactoringWorkspace workspace, Source source, String oldFile) {
+    return new MoveFileRefactoringImpl(
+        resourceProvider, workspace, source, oldFile);
+  }
+
+  /**
+   * The new file path to which the given file is being moved.
+   */
+  void set newFile(String newName);
+}
+
+/**
  * Abstract interface for all refactorings.
  */
 abstract class Refactoring {
@@ -402,6 +424,15 @@ class RefactoringWorkspace {
    */
   bool containsFile(String path) {
     return drivers.any((driver) {
+      return driver.contextRoot.containsFile(path);
+    });
+  }
+
+  /**
+   * Returns the drivers that have [path] in a context root.
+   */
+  Iterable<AnalysisDriver> driversContaining(String path) {
+    return drivers.where((driver) {
       return driver.contextRoot.containsFile(path);
     });
   }
@@ -491,7 +522,7 @@ class ResolvedUnitCache {
 
   ResolvedUnitCache(this._astProvider, [CompilationUnit unit]) {
     if (unit != null) {
-      _map[unit.element] = unit;
+      _map[unit.declaredElement] = unit;
     }
   }
 

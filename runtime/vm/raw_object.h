@@ -7,6 +7,7 @@
 
 #include "platform/assert.h"
 #include "platform/atomic.h"
+#include "vm/compiler/method_recognizer.h"
 #include "vm/exceptions.h"
 #include "vm/globals.h"
 #include "vm/snapshot.h"
@@ -288,13 +289,16 @@ class RawObject {
   // The tags field which is a part of the object header uses the following
   // bit fields for storing tags.
   enum TagBits {
-    kMarkBit = 0,
-    kCanonicalBit = 1,
-    kVMHeapObjectBit = 2,
-    kRememberedBit = 3,
-    kReservedTagPos = 4,  // kReservedBit{10K,100K,1M,10M}
-    kReservedTagSize = 4,
-    kSizeTagPos = kReservedTagPos + kReservedTagSize,  // = 8
+    kReservedBit = 0,
+    kOldAndNotMarkedBit = 1,      // Incremental barrier target.
+    kNewBit = 2,                  // Generational barrier target.
+    kOldBit = 3,                  // Incremental barrier source.
+    kOldAndNotRememberedBit = 4,  // Generational barrier source.
+    kCanonicalBit = 5,
+    kVMHeapObjectBit = 6,
+    kGraphMarkedBit = 7,  // ObjectGraph needs to mark through new space.
+
+    kSizeTagPos = 8,
     kSizeTagSize = 8,
     kClassIdTagPos = kSizeTagPos + kSizeTagSize,  // = 16
     kClassIdTagSize = 16,
@@ -303,6 +307,17 @@ class RawObject {
     kHashTagSize = 16,
 #endif
   };
+
+  static const intptr_t kGenerationalBarrierMask = 1 << kNewBit;
+  static const intptr_t kIncrementalBarrierMask = 1 << kOldAndNotMarkedBit;
+  static const intptr_t kBarrierOverlapShift = 2;
+  COMPILE_ASSERT(kOldAndNotMarkedBit + kBarrierOverlapShift == kOldBit);
+  COMPILE_ASSERT(kNewBit + kBarrierOverlapShift == kOldAndNotRememberedBit);
+
+  // The bit in the Smi tag position must be something that can be set to 0
+  // for a dead filler object of either generation.
+  // See Object::MakeUnusedSpaceTraversable.
+  COMPILE_ASSERT(kReservedBit == 0);
 
   COMPILE_ASSERT(kClassIdTagSize == (sizeof(classid_t) * kBitsPerByte));
 
@@ -340,6 +355,24 @@ class RawObject {
 
   class ClassIdTag
       : public BitField<uint32_t, intptr_t, kClassIdTagPos, kClassIdTagSize> {};
+
+  class OldAndNotMarkedBit
+      : public BitField<uint32_t, bool, kOldAndNotMarkedBit, 1> {};
+
+  class NewBit : public BitField<uint32_t, bool, kNewBit, 1> {};
+
+  class CanonicalObjectTag : public BitField<uint32_t, bool, kCanonicalBit, 1> {
+  };
+
+  class GraphMarkedBit : public BitField<uint32_t, bool, kGraphMarkedBit, 1> {};
+
+  class VMHeapObjectTag : public BitField<uint32_t, bool, kVMHeapObjectBit, 1> {
+  };
+
+  class OldBit : public BitField<uint32_t, bool, kOldBit, 1> {};
+
+  class OldAndNotRememberedBit
+      : public BitField<uint32_t, bool, kOldAndNotRememberedBit, 1> {};
 
   bool IsWellFormed() const {
     uword value = reinterpret_cast<uword>(this);
@@ -383,23 +416,32 @@ class RawObject {
   }
 
   // Support for GC marking bit.
-  bool IsMarked() const { return MarkBit::decode(ptr()->tags_); }
+  bool IsMarked() const {
+    ASSERT(IsOldObject());
+    return !OldAndNotMarkedBit::decode(ptr()->tags_);
+  }
   void SetMarkBit() {
+    ASSERT(IsOldObject());
     ASSERT(!IsMarked());
-    UpdateTagBit<MarkBit>(true);
+    UpdateTagBit<OldAndNotMarkedBit>(false);
   }
   void SetMarkBitUnsynchronized() {
+    ASSERT(IsOldObject());
     ASSERT(!IsMarked());
     uint32_t tags = ptr()->tags_;
-    ptr()->tags_ = MarkBit::update(true, tags);
+    ptr()->tags_ = OldAndNotMarkedBit::update(false, tags);
   }
   void ClearMarkBit() {
+    ASSERT(IsOldObject());
     ASSERT(IsMarked());
-    UpdateTagBit<MarkBit>(false);
+    UpdateTagBit<OldAndNotMarkedBit>(true);
   }
   // Returns false if the bit was already set.
   DART_WARN_UNUSED_RESULT
-  bool TryAcquireMarkBit() { return TryAcquireTagBit<MarkBit>(); }
+  bool TryAcquireMarkBit() {
+    ASSERT(IsOldObject());
+    return TryClearTagBit<OldAndNotMarkedBit>();
+  }
 
   // Support for object tags.
   bool IsCanonical() const { return CanonicalObjectTag::decode(ptr()->tags_); }
@@ -408,25 +450,35 @@ class RawObject {
   bool IsVMHeapObject() const { return VMHeapObjectTag::decode(ptr()->tags_); }
   void SetVMHeapObject() { UpdateTagBit<VMHeapObjectTag>(true); }
 
+  // Support for ObjectGraph marking bit.
+  bool IsGraphMarked() const {
+    if (IsVMHeapObject()) return true;
+    return GraphMarkedBit::decode(ptr()->tags_);
+  }
+  void SetGraphMarked() {
+    ASSERT(!IsVMHeapObject());
+    uint32_t tags = ptr()->tags_;
+    ptr()->tags_ = GraphMarkedBit::update(true, tags);
+  }
+  void ClearGraphMarked() {
+    ASSERT(!IsVMHeapObject());
+    uint32_t tags = ptr()->tags_;
+    ptr()->tags_ = GraphMarkedBit::update(false, tags);
+  }
+
   // Support for GC remembered bit.
-  bool IsRemembered() const { return RememberedBit::decode(ptr()->tags_); }
+  bool IsRemembered() const {
+    ASSERT(IsOldObject());
+    return !OldAndNotRememberedBit::decode(ptr()->tags_);
+  }
   void SetRememberedBit() {
     ASSERT(!IsRemembered());
-    UpdateTagBit<RememberedBit>(true);
+    UpdateTagBit<OldAndNotRememberedBit>(false);
   }
-  void SetRememberedBitUnsynchronized() {
-    ASSERT(!IsRemembered());
-    uint32_t tags = ptr()->tags_;
-    ptr()->tags_ = RememberedBit::update(true, tags);
+  void ClearRememberedBit() {
+    ASSERT(IsOldObject());
+    UpdateTagBit<OldAndNotRememberedBit>(true);
   }
-  void ClearRememberedBit() { UpdateTagBit<RememberedBit>(false); }
-  void ClearRememberedBitUnsynchronized() {
-    uint32_t tags = ptr()->tags_;
-    ptr()->tags_ = RememberedBit::update(false, tags);
-  }
-  // Returns false if the bit was already set.
-  DART_WARN_UNUSED_RESULT
-  bool TryAcquireRememberedBit() { return TryAcquireTagBit<RememberedBit>(); }
 
 #define DEFINE_IS_CID(clazz)                                                   \
   bool Is##clazz() const { return ((GetClassId() == k##clazz##Cid)); }
@@ -585,20 +637,6 @@ class RawObject {
   uint32_t hash_;
 #endif
 
-  class MarkBit : public BitField<uint32_t, bool, kMarkBit, 1> {};
-
-  class RememberedBit : public BitField<uint32_t, bool, kRememberedBit, 1> {};
-
-  class CanonicalObjectTag : public BitField<uint32_t, bool, kCanonicalBit, 1> {
-  };
-
-  class VMHeapObjectTag : public BitField<uint32_t, bool, kVMHeapObjectBit, 1> {
-  };
-
-  class ReservedBits
-      : public BitField<uint32_t, intptr_t, kReservedTagPos, kReservedTagSize> {
-  };
-
   // TODO(koda): After handling tags_, return const*, like Object::raw_ptr().
   RawObject* ptr() const {
     ASSERT(IsHeapObject());
@@ -638,6 +676,12 @@ class RawObject {
         &ptr()->tags_, TagBitField::encode(true));
     return !TagBitField::decode(old_tags);
   }
+  template <class TagBitField>
+  bool TryClearTagBit() {
+    uint32_t old_tags = AtomicOperations::FetchAndRelaxedUint32(
+        &ptr()->tags_, ~TagBitField::encode(true));
+    return TagBitField::decode(old_tags);
+  }
 
   // All writes to heap objects should ultimately pass through one of the
   // methods below or their counterparts in Object, to ensure that the
@@ -646,11 +690,51 @@ class RawObject {
   template <typename type>
   void StorePointer(type const* addr, type value) {
     *const_cast<type*>(addr) = value;
-    // Filter stores based on source and target.
+
     if (!value->IsHeapObject()) return;
-    if (value->IsNewObject() && this->IsOldObject() && !this->IsRemembered()) {
-      this->SetRememberedBit();
-      Thread::Current()->StoreBufferAddObject(this);
+
+    uint32_t source_tags = this->ptr()->tags_;
+    uint32_t target_tags = value->ptr()->tags_;
+    Thread* thread = Thread::Current();
+    if (((source_tags >> kBarrierOverlapShift) & target_tags &
+         thread->write_barrier_mask()) != 0) {
+      if (value->IsNewObject()) {
+        // Generational barrier: record when a store creates an
+        // old-and-not-remembered -> new reference.
+        ASSERT(!this->IsRemembered());
+        this->SetRememberedBit();
+        thread->StoreBufferAddObject(this);
+      } else {
+        // Incremental barrier: record when a store creates an
+        // old -> old-and-not-marked reference.
+        ASSERT(value->IsOldObject());
+        UNREACHABLE();
+      }
+    }
+  }
+
+  template <typename type>
+  void StorePointer(type const* addr, type value, Thread* thread) {
+    *const_cast<type*>(addr) = value;
+
+    if (!value->IsHeapObject()) return;
+
+    uint32_t source_tags = this->ptr()->tags_;
+    uint32_t target_tags = value->ptr()->tags_;
+    if (((source_tags >> kBarrierOverlapShift) & target_tags &
+         thread->write_barrier_mask()) != 0) {
+      if (value->IsNewObject()) {
+        // Generational barrier: record when a store creates an
+        // old-and-not-remembered -> new reference.
+        ASSERT(!this->IsRemembered());
+        this->SetRememberedBit();
+        thread->StoreBufferAddObject(this);
+      } else {
+        // Incremental barrier: record when a store creates an
+        // old -> old-and-not-marked reference.
+        ASSERT(value->IsOldObject());
+        UNREACHABLE();
+      }
     }
   }
 
@@ -762,14 +846,16 @@ class RawClass : public RawObject {
   RawType* canonical_type_;  // Canonical type for this class.
   RawArray* invocation_dispatcher_cache_;  // Cache for dispatcher functions.
   RawCode* allocation_stub_;  // Stub code for allocation of instances.
+  RawGrowableObjectArray* direct_implementors_;  // Array of Class.
   RawGrowableObjectArray* direct_subclasses_;  // Array of Class.
   RawArray* dependent_code_;                   // CHA optimized codes.
   VISIT_TO(RawObject*, dependent_code_);
   RawObject** to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
+      case Snapshot::kFullAOT:
+        return reinterpret_cast<RawObject**>(&ptr()->allocation_stub_);
       case Snapshot::kFull:
       case Snapshot::kScript:
-      case Snapshot::kFullAOT:
         return reinterpret_cast<RawObject**>(&ptr()->direct_subclasses_);
       case Snapshot::kFullJIT:
         return reinterpret_cast<RawObject**>(&ptr()->dependent_code_);
@@ -789,8 +875,12 @@ class RawClass : public RawObject {
   int32_t next_field_offset_in_words_;  // Offset of the next instance field.
   classid_t id_;                // Class Id, also index in the class table.
   int16_t num_type_arguments_;  // Number of type arguments in flattened vector.
-  int16_t num_own_type_arguments_;  // Number of non-overlapping type arguments.
-  uint16_t num_native_fields_;      // Number of native fields in class.
+
+  // Bitfields with number of non-overlapping type arguments and 'has_pragma'
+  // bit.
+  uint16_t has_pragma_and_num_own_type_arguments_;
+
+  uint16_t num_native_fields_;
   uint16_t state_bits_;
   NOT_IN_PRECOMPILED(intptr_t kernel_offset_);
 
@@ -895,6 +985,7 @@ class RawFunction : public RawObject {
   static bool CheckUsageCounter(RawFunction* raw_fun);
 
   uword entry_point_;  // Accessed from generated code.
+  uword unchecked_entry_point_;  // Accessed from generated code.
 
   VISIT_FROM(RawObject*, name_);
   RawString* name_;
@@ -924,10 +1015,8 @@ class RawFunction : public RawObject {
   RawObject** to_no_code() {
     return reinterpret_cast<RawObject**>(&ptr()->ic_data_array_);
   }
-#if defined(DART_USE_INTERPRETER)
-  RawCode* bytecode_;
-#endif
   RawCode* code_;  // Currently active code. Accessed from generated code.
+  NOT_IN_PRECOMPILED(RawCode* bytecode_);
   NOT_IN_PRECOMPILED(RawCode* unoptimized_code_);  // Unoptimized code, keep it
                                                    // after optimization.
 #if defined(DART_PRECOMPILED_RUNTIME)
@@ -941,8 +1030,7 @@ class RawFunction : public RawObject {
   uint32_t kind_tag_;                          // See Function::KindTagBits.
   uint32_t packed_fields_;
 
-  typedef BitField<uint32_t, bool, 0, 1> PackedIsNoSuchMethodForwarder;
-  typedef BitField<uint32_t, bool, PackedIsNoSuchMethodForwarder::kNextBit, 1>
+  typedef BitField<uint32_t, bool, 0, 1>
       PackedHasNamedOptionalParameters;
   typedef BitField<uint32_t,
                    bool,
@@ -1041,7 +1129,6 @@ class RawField : public RawObject {
   } initializer_;
   RawSmi* guarded_list_length_;
   RawArray* dependent_code_;
-  VISIT_TO(RawObject*, dependent_code_);
   RawObject** to_snapshot(Snapshot::Kind kind) {
     switch (kind) {
       case Snapshot::kFull:
@@ -1059,7 +1146,12 @@ class RawField : public RawObject {
     UNREACHABLE();
     return NULL;
   }
-
+#if defined(DART_PRECOMPILED_RUNTIME)
+  VISIT_TO(RawObject*, dependent_code_);
+#else
+  RawSubtypeTestCache* type_test_cache_;  // For type test in implicit setter.
+  VISIT_TO(RawObject*, type_test_cache_);
+#endif
   TokenPosition token_pos_;
   TokenPosition end_token_pos_;
   classid_t guarded_cid_;
@@ -1070,6 +1162,11 @@ class RawField : public RawObject {
   // guarded_cid_. Stored corrected by -kHeapObjectTag to simplify code
   // generated on platforms with weak addressing modes (ARM).
   int8_t guarded_list_length_in_object_offset_;
+
+  // Runtime tracking state of exactness of type annotation of this field.
+  // See StaticTypeExactnessState for the meaning and possible values in this
+  // field.
+  int8_t static_type_exactness_state_;
 
   uint8_t kind_bits_;  // static, final, const, has initializer....
 
@@ -1234,14 +1331,55 @@ class RawKernelProgramInfo : public RawObject {
   RawArray* scripts_;
   RawArray* constants_;
   RawGrowableObjectArray* potential_natives_;
-  VISIT_TO(RawObject*, potential_natives_);
+  RawGrowableObjectArray* potential_pragma_functions_;
+  RawExternalTypedData* constants_table_;
+  VISIT_TO(RawObject*, constants_table_);
+
+  RawObject** to_snapshot(Snapshot::Kind kind) {
+    return reinterpret_cast<RawObject**>(&ptr()->potential_natives_);
+  }
 };
 
 class RawCode : public RawObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Code);
 
   uword entry_point_;          // Accessed from generated code.
-  uword checked_entry_point_;  // Accessed from generated code (AOT only).
+
+  // In AOT this entry-point supports switchable calls. It checks the type of
+  // the receiver on entry to the function and calls a stub to patch up the
+  // caller if they mismatch.
+  uword monomorphic_entry_point_;  // Accessed from generated code (AOT only).
+
+  // Entry-point used from call-sites with some additional static information.
+  // The exact behavior of this entry-point depends on the kind of function:
+  //
+  // kRegularFunction/kSetter/kGetter:
+  //
+  //   Call-site is assumed to know that the (type) arguments are invariantly
+  //   type-correct against the actual runtime-type of the receiver. For
+  //   instance, this entry-point is used for invocations against "this" and
+  //   invocations from IC stubs that test the class type arguments.
+  //
+  // kClosureFunction:
+  //
+  //   Call-site is assumed to pass the correct number of positional and type
+  //   arguments (except in the case of partial instantiation, when the type
+  //   arguments are omitted). All (type) arguments are assumed to match the
+  //   corresponding (type) parameter types (bounds).
+  //
+  // kImplicitClosureFunction:
+  //
+  //   Similar to kClosureFunction, except that the types (bounds) of the (type)
+  //   arguments are expected to match the *runtime signature* of the closure,
+  //   which (unlike with kClosureFunction) may have more general (type)
+  //   parameter types (bounds) than the declared type of the forwarded method.
+  //
+  // In many cases a distinct static entry-point will not be created for a
+  // function if it would not be able to skip a lot of work (e.g., no argument
+  // type checks are necessary or this Code belongs to a stub). In this case
+  // 'unchecked_entry_point_' will refer to the same position as 'entry_point_'.
+  //
+  uword unchecked_entry_point_;  // Accessed from generated code.
 
   VISIT_FROM(RawObject*, object_pool_);
   RawObjectPool* object_pool_;     // Accessed from generated code.
@@ -1253,7 +1391,7 @@ class RawCode : public RawObject {
   RawExceptionHandlers* exception_handlers_;
   RawPcDescriptors* pc_descriptors_;
   union {
-    RawTypedData* catch_entry_state_maps_;
+    RawTypedData* catch_entry_moves_maps_;
     RawSmi* variables_;
   } catch_entry_;
   RawArray* stackmaps_;
@@ -1313,12 +1451,10 @@ class RawObjectPool : public RawObject {
   Entry* data() { OPEN_ARRAY_START(Entry, Entry); }
   Entry const* data() const { OPEN_ARRAY_START(Entry, Entry); }
 
-  // The entry types are located after the last entry. They are interpreted
-  // as ObjectPool::EntryType.
-  uint8_t* entry_types() {
-    return reinterpret_cast<uint8_t*>(&data()[length_]);
-  }
-  uint8_t const* entry_types() const {
+  // The entry bits are located after the last entry. They are encoded versions
+  // of `ObjectPool::TypeBits() | ObjectPool::PatchabililtyBit()`.
+  uint8_t* entry_bits() { return reinterpret_cast<uint8_t*>(&data()[length_]); }
+  uint8_t const* entry_bits() const {
     return reinterpret_cast<uint8_t const*>(&data()[length_]);
   }
 
@@ -1342,6 +1478,8 @@ class RawInstructions : public RawObject {
   // whether this field is included or excluded.
   CodeStatistics* stats_;
 #endif
+
+  uword unchecked_entrypoint_pc_offset_;
 
   // Variable length data follows here.
   uint8_t* data() { OPEN_ARRAY_START(uint8_t, uint8_t); }
@@ -1642,6 +1780,10 @@ class RawICData : public RawObject {
   RawArray* ic_data_;          // Contains class-ids, target and count.
   RawString* target_name_;     // Name of target function.
   RawArray* args_descriptor_;  // Arguments descriptor.
+  // Static type of the receiver. If it is set then we are performing
+  // exactness profiling for the receiver type. See StaticTypeExactnessState
+  // class for more information.
+  NOT_IN_PRECOMPILED(RawAbstractType* static_receiver_type_);
   RawObject* owner_;  // Parent/calling function or original IC of cloned IC.
   VISIT_TO(RawObject*, owner_);
   RawObject** to_snapshot(Snapshot::Kind kind) {
@@ -1663,8 +1805,10 @@ class RawICData : public RawObject {
   NOT_IN_PRECOMPILED(int32_t deopt_id_);
   uint32_t state_bits_;  // Number of arguments tested in IC, deopt reasons.
 #if defined(TAG_IC_DATA)
-  intptr_t tag_;  // Debugging, verifying that the icdata is assigned to the
-                  // same instruction again. Store -1 or Instruction::Tag.
+  enum class Tag : intptr_t{kUnknown, kInstanceCall, kStaticCall};
+
+  Tag tag_;  // Debugging, verifying that the icdata is assigned to the
+             // same instruction again.
 #endif
 };
 
@@ -1932,7 +2076,7 @@ class RawClosure : public RawInstance {
   // passed-in function type arguments get concatenated to the function type
   // arguments of the parent that are found in the context_.
   //
-  // delayed_type_arguments_ is used to support the parital instantiation
+  // delayed_type_arguments_ is used to support the partial instantiation
   // feature. When this field is set to any value other than
   // Object::empty_type_arguments(), the types in this vector will be passed as
   // type arguments to the closure when invoked. In this case there may not be
@@ -2174,13 +2318,14 @@ class RawTypedData : public RawInstance {
   const uint8_t* data() const { OPEN_ARRAY_START(uint8_t, uint8_t); }
 
   friend class Api;
-  friend class Object;
   friend class Instance;
-  friend class SnapshotReader;
+  friend class NativeEntryData;
+  friend class Object;
   friend class ObjectPool;
-  friend class RawObjectPool;
-  friend class ObjectPoolSerializationCluster;
   friend class ObjectPoolDeserializationCluster;
+  friend class ObjectPoolSerializationCluster;
+  friend class RawObjectPool;
+  friend class SnapshotReader;
 };
 
 class RawExternalTypedData : public RawInstance {

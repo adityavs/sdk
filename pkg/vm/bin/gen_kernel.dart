@@ -10,12 +10,11 @@ import 'package:front_end/src/api_prototype/front_end.dart';
 import 'package:kernel/binary/ast_to_binary.dart';
 import 'package:kernel/src/tool/batch_util.dart' as batch_util;
 import 'package:kernel/target/targets.dart' show TargetFlags;
-import 'package:kernel/target/vm.dart' show VmTarget;
 import 'package:kernel/text/ast_to_text.dart'
     show globalDebuggingNames, NameSystem;
-import 'package:vm/bytecode/gen_bytecode.dart' show isKernelBytecodeEnabled;
 import 'package:vm/kernel_front_end.dart'
     show compileToKernel, ErrorDetector, ErrorPrinter, parseCommandLineDefines;
+import 'package:vm/target/vm.dart' show VmTarget;
 
 final ArgParser _argParser = new ArgParser(allowTrailingOptions: true)
   ..addOption('platform',
@@ -47,8 +46,7 @@ final ArgParser _argParser = new ArgParser(allowTrailingOptions: true)
       defaultsTo: true)
   ..addMultiOption('entry-points',
       help: 'Path to JSON file with the list of entry points')
-  ..addFlag('gen-bytecode',
-      help: 'Generate bytecode', defaultsTo: isKernelBytecodeEnabled)
+  ..addFlag('gen-bytecode', help: 'Generate bytecode', defaultsTo: false)
   ..addFlag('drop-ast',
       help: 'Drop AST for members with bytecode', defaultsTo: false);
 
@@ -98,13 +96,6 @@ Future<int> compile(List<String> arguments) async {
   }
 
   final List<String> entryPoints = options['entry-points'] ?? <String>[];
-  if (entryPoints.isEmpty) {
-    entryPoints.addAll([
-      'pkg/vm/lib/transformations/type_flow/entry_points.json',
-      'pkg/vm/lib/transformations/type_flow/entry_points_extra.json',
-      'pkg/vm/lib/transformations/type_flow/entry_points_extra_standalone.json',
-    ]);
-  }
 
   final errorPrinter = new ErrorPrinter();
   final errorDetector = new ErrorDetector(previousErrorHandler: errorPrinter);

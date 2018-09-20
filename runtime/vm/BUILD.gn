@@ -62,8 +62,8 @@ library_for_all_configs("libdart_vm") {
     extra_deps = [
       # TODO(US-399): Remove time_service specific code when it is no longer
       # necessary.
-      "//garnet/public/lib/app/cpp",
-      "//garnet/public/lib/time_zone/fidl",
+      "//garnet/public/lib/component/cpp",
+      "//garnet/public/fidl/fuchsia.timezone",
 
       # TODO(zra): When the platform-specific timeline code is moved out to
       # the embedder, this can go away.
@@ -305,7 +305,7 @@ generate_core_libraries("core_libraries") {
 
 compile_platform("vm_legacy_platform") {
   single_root_scheme = "org-dartlang-sdk"
-  single_root_base = "../../"
+  single_root_base = rebase_path("../../")
   libraries_specification_uri = "org-dartlang-sdk:///sdk/lib/libraries.json"
 
   outputs = [
@@ -320,7 +320,7 @@ compile_platform("vm_platform") {
   add_implicit_vm_platform_dependency = false
 
   single_root_scheme = "org-dartlang-sdk"
-  single_root_base = "../../"
+  single_root_base = rebase_path("../../")
   libraries_specification_uri = "org-dartlang-sdk:///sdk/lib/libraries.json"
 
   outputs = [
@@ -332,6 +332,10 @@ compile_platform("vm_platform") {
     "--strong-mode",
     "dart:core",
   ]
+
+  if (dart_platform_bytecode) {
+    args += [ "--bytecode" ]
+  }
 }
 
 group("kernel_platform_files") {

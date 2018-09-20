@@ -4,7 +4,7 @@
 
 /// This library defines runtime operations on objects used by the code
 /// generator.
-part of "runtime.dart";
+part of dart._runtime;
 
 // TODO(jmesserly): remove this in favor of _Invocation.
 class InvocationImpl extends Invocation {
@@ -82,12 +82,14 @@ bindCall(obj, name) {
 ///
 /// We need to apply the type arguments both to the function, as well as its
 /// associated function type.
-gbind(f, @rest typeArgs) {
+gbind(f, @rest List typeArgs) {
+  GenericFunctionType type = JS('!', '#[#]', f, _runtimeType);
+  type.checkBounds(typeArgs);
+  // Create a JS wrapper function that will also pass the type arguments, and
+  // tag it with the instantiated function type.
   var result =
       JS('', '(...args) => #.apply(null, #.concat(args))', f, typeArgs);
-  var sig = JS('', '#[#].instantiate(#)', f, _runtimeType, typeArgs);
-  fn(result, sig);
-  return result;
+  return fn(result, type.instantiate(typeArgs));
 }
 
 dloadRepl(obj, field) => dload(obj, replNameLookup(obj, field), false);
@@ -422,8 +424,7 @@ final Object _ignoreTypeFailure = JS('', '''(() => {
     }
 
     if (!!$isSubtype(type, $Iterable) && !!$isSubtype(actual, $Iterable) ||
-        !!$isSubtype(type, $Future) && !!$isSubtype(actual, $Future) ||
-        !!$isSubtype(type, $Map) && !!$isSubtype(actual, $Map)) {
+        !!$isSubtype(type, $Future) && !!$isSubtype(actual, $Future)) {
       console.warn('Ignoring cast fail from ' + $typeName(actual) +
                    ' to ' + $typeName(type));
       return true;

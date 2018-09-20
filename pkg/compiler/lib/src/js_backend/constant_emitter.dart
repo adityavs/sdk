@@ -16,7 +16,6 @@ import '../universe/world_builder.dart';
 import 'allocator_analysis.dart' show JAllocatorAnalysis;
 import 'constant_system_javascript.dart';
 import 'js_backend.dart';
-import 'namer.dart';
 import 'runtime_types.dart';
 
 typedef jsAst.Expression _ConstantReferenceGenerator(ConstantValue constant);
@@ -37,12 +36,11 @@ class ConstantEmitter implements ConstantValueVisitor<jsAst.Expression, Null> {
       new RegExp(r'''^ *(//.*)?\n|  *//[^''"\n]*$''', multiLine: true);
 
   final CompilerOptions _options;
-  final CommonElements _commonElements;
+  final JCommonElements _commonElements;
   final CodegenWorldBuilder _worldBuilder;
   final RuntimeTypesNeed _rtiNeed;
   final RuntimeTypesEncoder _rtiEncoder;
   final JAllocatorAnalysis _allocatorAnalysis;
-  final Namer _namer;
   final CodeEmitterTask _task;
   final _ConstantReferenceGenerator constantReferenceGenerator;
   final _ConstantListGenerator makeConstantList;
@@ -59,7 +57,6 @@ class ConstantEmitter implements ConstantValueVisitor<jsAst.Expression, Null> {
       this._rtiNeed,
       this._rtiEncoder,
       this._allocatorAnalysis,
-      this._namer,
       this._task,
       this.constantReferenceGenerator,
       this.makeConstantList);
@@ -280,19 +277,21 @@ class ConstantEmitter implements ConstantValueVisitor<jsAst.Expression, Null> {
 
   @override
   jsAst.Expression visitType(TypeConstantValue constant, [_]) {
-    DartType type = constant.representedType;
-    jsAst.Name typeName;
-    Entity element;
-    if (type is InterfaceType) {
-      element = type.element;
-    } else if (type is TypedefType) {
-      element = type.element;
-    } else {
-      assert(type is DynamicType);
+    DartType type = constant.representedType.unaliased;
+
+    jsAst.Expression unexpected(TypeVariableType _variable) {
+      TypeVariableType variable = _variable;
+      throw failedAt(
+          NO_LOCATION_SPANNABLE,
+          "Unexpected type variable '${variable}'"
+          " in constant '${constant.toDartText()}'");
     }
-    typeName = _namer.runtimeTypeName(element);
-    return new jsAst.Call(getHelperProperty(_commonElements.createRuntimeType),
-        [js.quoteName(typeName)]);
+
+    jsAst.Expression rti =
+        _rtiEncoder.getTypeRepresentation(_emitter, type, unexpected);
+
+    return new jsAst.Call(
+        getHelperProperty(_commonElements.createRuntimeType), [rti]);
   }
 
   @override
@@ -341,24 +340,8 @@ class ConstantEmitter implements ConstantValueVisitor<jsAst.Expression, Null> {
   @override
   jsAst.Expression visitInstantiation(InstantiationConstantValue constant,
       [_]) {
-    // TODO(johnniwinther,sra): Support arbitrary type argument count.
-    ClassEntity cls;
-    switch (constant.typeArguments.length) {
-      case 1:
-        cls = _commonElements.instantiation1Class;
-        break;
-      case 2:
-        cls = _commonElements.instantiation2Class;
-        break;
-      case 3:
-        cls = _commonElements.instantiation3Class;
-        break;
-      default:
-        failedAt(
-            NO_LOCATION_SPANNABLE,
-            "Unsupported instantiation argument count: "
-            "${constant.typeArguments.length}");
-    }
+    ClassEntity cls =
+        _commonElements.getInstantiationClass(constant.typeArguments.length);
     List<jsAst.Expression> fields = <jsAst.Expression>[
       constantReferenceGenerator(constant.function),
       _reifiedTypeArguments(constant, constant.typeArguments)

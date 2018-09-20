@@ -34,6 +34,11 @@ class DFE {
   void set_use_dfe(bool value = true) { use_dfe_ = value; }
   bool UseDartFrontend() const { return use_dfe_; }
 
+  void set_use_incremental_compiler(bool value) {
+    use_incremental_compiler_ = value;
+  }
+  bool use_incremental_compiler() const { return use_incremental_compiler_; }
+
   // Returns the platform binary file name if the path to
   // kernel binaries was set using SetKernelBinaries.
   const char* GetPlatformBinaryFilename();
@@ -52,7 +57,6 @@ class DFE {
   // Compiles specified script.
   // Returns result from compiling the script.
   Dart_KernelCompilationResult CompileScript(const char* script_uri,
-                                             bool strong,
                                              bool incremental,
                                              const char* package_config);
 
@@ -65,7 +69,6 @@ class DFE {
                             intptr_t* kernel_buffer_size,
                             char** error,
                             int* exit_code,
-                            bool strong,
                             const char* package_config);
 
   // Reads the script kernel file if specified 'script_uri' is a kernel file.
@@ -93,13 +96,13 @@ class DFE {
   bool CanUseDartFrontend() const;
 
   void LoadPlatform(const uint8_t** kernel_buffer,
-                    intptr_t* kernel_buffer_size,
-                    bool strong = false);
+                    intptr_t* kernel_buffer_size);
   void LoadKernelService(const uint8_t** kernel_service_buffer,
                          intptr_t* kernel_service_buffer_size);
 
  private:
   bool use_dfe_;
+  bool use_incremental_compiler_;
   char* frontend_filename_;
 
   // Kernel binary specified on the cmd line.

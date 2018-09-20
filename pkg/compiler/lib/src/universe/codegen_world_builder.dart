@@ -77,6 +77,12 @@ abstract class CodegenWorldBuilder implements WorldBuilder {
   /// an ordering that is less sensitive to perturbations in the source code.
   List<ConstantValue> getConstantsForEmission(
       [Comparator<ConstantValue> preSortCompare]);
+
+  /// Returns the types that are live as constant type literals.
+  Iterable<DartType> get constTypeLiterals;
+
+  /// Returns the types that are live as constant type arguments.
+  Iterable<DartType> get liveTypeArguments;
 }
 
 class CodegenWorldBuilderImpl extends WorldBuilderBase
@@ -162,6 +168,9 @@ class CodegenWorldBuilderImpl extends WorldBuilderBase
   final KernelToWorldBuilder _elementMap;
   final GlobalLocalsMap _globalLocalsMap;
 
+  final Set<DartType> _constTypeLiterals = new Set<DartType>();
+  final Set<DartType> _liveTypeArguments = new Set<DartType>();
+
   CodegenWorldBuilderImpl(
       this._elementMap,
       this._globalLocalsMap,
@@ -195,23 +204,15 @@ class CodegenWorldBuilderImpl extends WorldBuilderBase
   // subclass and through subtype instantiated types/classes.
   // TODO(johnniwinther): Support unknown type arguments for generic types.
   void registerTypeInstantiation(
-      InterfaceType type, ClassUsedCallback classUsed,
-      {bool byMirrors: false}) {
+      InterfaceType type, ClassUsedCallback classUsed) {
     ClassEntity cls = type.element;
     bool isNative = _nativeBasicData.isNativeClass(cls);
     _instantiatedTypes.add(type);
-    if (!cls.isAbstract
-        // We can't use the closed-world assumption with native abstract
-        // classes; a native abstract class may have non-abstract subclasses
-        // not declared to the program.  Instances of these classes are
-        // indistinguishable from the abstract class.
-        ||
-        isNative
-        // Likewise, if this registration comes from the mirror system,
-        // all bets are off.
-        // TODO(herhut): Track classes required by mirrors separately.
-        ||
-        byMirrors) {
+    // We can't use the closed-world assumption with native abstract
+    // classes; a native abstract class may have non-abstract subclasses
+    // not declared to the program.  Instances of these classes are
+    // indistinguishable from the abstract class.
+    if (!cls.isAbstract || isNative) {
       _directlyInstantiatedClasses.add(cls);
       _processInstantiatedClass(cls, classUsed);
     }
@@ -364,7 +365,6 @@ class CodegenWorldBuilderImpl extends WorldBuilderBase
         break;
       case StaticUseKind.SUPER_FIELD_SET:
       case StaticUseKind.FIELD_SET:
-      case StaticUseKind.DIRECT_USE:
       case StaticUseKind.CLOSURE:
       case StaticUseKind.CLOSURE_CALL:
       case StaticUseKind.CALL_METHOD:
@@ -421,7 +421,6 @@ class CodegenWorldBuilderImpl extends WorldBuilderBase
       case StaticUseKind.SET:
       case StaticUseKind.INIT:
       case StaticUseKind.REFLECT:
-      case StaticUseKind.DIRECT_USE:
         useSet.addAll(usage.normalUse());
         break;
       case StaticUseKind.CONSTRUCTOR_INVOKE:
@@ -688,4 +687,16 @@ class CodegenWorldBuilderImpl extends WorldBuilderBase
       f(member);
     });
   }
+
+  void registerConstTypeLiteral(DartType type) {
+    _constTypeLiterals.add(type);
+  }
+
+  Iterable<DartType> get constTypeLiterals => _constTypeLiterals;
+
+  void registerTypeArgument(DartType type) {
+    _liveTypeArguments.add(type);
+  }
+
+  Iterable<DartType> get liveTypeArguments => _liveTypeArguments;
 }

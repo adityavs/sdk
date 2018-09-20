@@ -11,6 +11,7 @@ import 'package:analyzer/src/dart/analysis/file_state.dart';
 import 'package:analyzer/src/dart/analysis/status.dart';
 import 'package:analyzer/src/file_system/file_system.dart';
 import 'package:analyzer/src/generated/engine.dart' show AnalysisOptionsImpl;
+import 'package:analyzer/src/generated/parser.dart' as analyzer;
 import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/source/package_map_resolver.dart';
@@ -66,11 +67,6 @@ class BaseAnalysisDriverTest {
   String testFile;
   String testCode;
 
-  /**
-   * Whether to enable the Dart 2.0 Common Front End.
-   */
-  bool useCFE = false;
-
   bool get disableChangesAndCacheAllResults => false;
 
   void addTestFile(String content, {bool priority: false}) {
@@ -82,7 +78,14 @@ class BaseAnalysisDriverTest {
     }
   }
 
-  AnalysisDriver createAnalysisDriver({SummaryDataStore externalSummaries}) {
+  AnalysisDriver createAnalysisDriver(
+      {Map<String, List<Folder>> packageMap,
+      SummaryDataStore externalSummaries}) {
+    packageMap ??= <String, List<Folder>>{
+      'test': [provider.getFolder(testProject)],
+      'aaa': [provider.getFolder(_p('/aaa/lib'))],
+      'bbb': [provider.getFolder(_p('/bbb/lib'))],
+    };
     return new AnalysisDriver(
         scheduler,
         logger,
@@ -93,22 +96,16 @@ class BaseAnalysisDriverTest {
         new SourceFactory([
           new DartUriResolver(sdk),
           generatedUriResolver,
-          new PackageMapUriResolver(provider, <String, List<Folder>>{
-            'test': [provider.getFolder(testProject)],
-            'aaa': [provider.getFolder(_p('/aaa/lib'))],
-            'bbb': [provider.getFolder(_p('/bbb/lib'))],
-          }),
+          new PackageMapUriResolver(provider, packageMap),
           new ResourceUriResolver(provider)
         ], null, provider),
         createAnalysisOptions(),
         disableChangesAndCacheAllResults: disableChangesAndCacheAllResults,
-        externalSummaries: externalSummaries,
-        enableKernelDriver: useCFE);
+        externalSummaries: externalSummaries);
   }
 
-  AnalysisOptionsImpl createAnalysisOptions() => new AnalysisOptionsImpl()
-    ..strongMode = true
-    ..useFastaParser = useCFE;
+  AnalysisOptionsImpl createAnalysisOptions() =>
+      new AnalysisOptionsImpl()..useFastaParser = analyzer.Parser.useFasta;
 
   int findOffset(String search) {
     int offset = testCode.indexOf(search);

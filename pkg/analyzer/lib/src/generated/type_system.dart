@@ -215,6 +215,22 @@ class GenericInferrer {
         // more errors (e.g. because `dynamic` is the most common bound).
       }
 
+      if (inferred is FunctionType && inferred.typeFormals.isNotEmpty) {
+        errorReporter
+            ?.reportErrorForNode(StrongModeCode.COULD_NOT_INFER, errorNode, [
+          typeParam,
+          ' Inferred candidate type $inferred has type parameters'
+              ' ${(inferred as FunctionType).typeFormals}, but a function with'
+              ' type parameters cannot be used as a type argument.'
+        ]);
+
+        // Heuristic: Using a generic function type as a bound makes subtyping
+        // undecidable. Therefore, we cannot keep [inferred] unless we wish to
+        // generate bogus subtyping errors. Instead generate plain [Function],
+        // which is the most general function type.
+        inferred = typeProvider.functionType;
+      }
+
       if (UnknownInferredType.isKnown(inferred)) {
         knownTypes[typeParam] = inferred;
       }
@@ -828,8 +844,7 @@ class StrongTypeSystemImpl extends TypeSystem {
    */
   DartType getLeastNullableSupertype(InterfaceType type) {
     // compute set of supertypes
-    List<InterfaceType> s = InterfaceTypeImpl
-        .computeSuperinterfaceSet(type, strong: true)
+    List<InterfaceType> s = InterfaceTypeImpl.computeSuperinterfaceSet(type)
         .where(isNullableType)
         .toList();
     return InterfaceTypeImpl.computeTypeAtMaxUniqueDepth(s);
@@ -1511,8 +1526,7 @@ class StrongTypeSystemImpl extends TypeSystem {
       lub.typeArguments = tArgs;
       return lub;
     }
-    return InterfaceTypeImpl.computeLeastUpperBound(type1, type2,
-            strong: isStrong) ??
+    return InterfaceTypeImpl.computeLeastUpperBound(type1, type2) ??
         typeProvider.dynamicType;
   }
 
@@ -1568,7 +1582,9 @@ class StrongTypeSystemImpl extends TypeSystem {
     visitedTypes ??= new HashSet<ClassElement>();
     if (!visitedTypes.add(i1Element)) return false;
 
-    if (_isInterfaceSubtypeOf(i1.superclass, i2, visitedTypes)) {
+    InterfaceType superclass = i1.superclass;
+    if (superclass != null &&
+        _isInterfaceSubtypeOf(superclass, i2, visitedTypes)) {
       return true;
     }
 
@@ -1581,6 +1597,14 @@ class StrongTypeSystemImpl extends TypeSystem {
     for (final parent in i1.mixins) {
       if (_isInterfaceSubtypeOf(parent, i2, visitedTypes)) {
         return true;
+      }
+    }
+
+    if (i1Element.isMixin) {
+      for (final parent in i1.superclassConstraints) {
+        if (_isInterfaceSubtypeOf(parent, i2, visitedTypes)) {
+          return true;
+        }
       }
     }
 
@@ -1735,6 +1759,9 @@ abstract class TypeSystem {
 
   List<InterfaceType> gatherMixinSupertypeConstraints(
       ClassElement mixinElement) {
+    if (mixinElement.isMixin) {
+      return mixinElement.superclassConstraints;
+    }
     var mixinSupertypeConstraints = <InterfaceType>[];
     void addIfGeneric(InterfaceType type) {
       if (type.element.typeParameters.isNotEmpty) {
@@ -2008,7 +2035,7 @@ abstract class TypeSystem {
     } else if (type is InterfaceType) {
       return type.typeParameters;
     } else {
-      return TypeParameterElement.EMPTY_LIST;
+      return const <TypeParameterElement>[];
     }
   }
 
@@ -2119,19 +2146,20 @@ abstract class TypeSystem {
    */
   static TypeSystem create(AnalysisContext context) {
     var options = context.analysisOptions as AnalysisOptionsImpl;
-    return options.strongMode
-        ? new StrongTypeSystemImpl(context.typeProvider,
-            declarationCasts: options.declarationCasts,
-            implicitCasts: options.implicitCasts,
-            nonnullableTypes: options.nonnullableTypes)
-        : new TypeSystemImpl(context.typeProvider);
+    return new StrongTypeSystemImpl(context.typeProvider,
+        declarationCasts: options.declarationCasts,
+        implicitCasts: options.implicitCasts,
+        nonnullableTypes: options.nonnullableTypes);
   }
 }
 
 /**
  * Implementation of [TypeSystem] using the rules in the Dart specification.
  */
+@deprecated
 class TypeSystemImpl extends TypeSystem {
+  // TODO(brianwilkerson) Remove this class and update references to it to use
+  // StrongTypeSystemImpl.
   final TypeProvider typeProvider;
 
   TypeSystemImpl(this.typeProvider);

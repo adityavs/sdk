@@ -14,8 +14,6 @@
 
 namespace dart {
 
-class FlowGraphBuilder;
-class ValueInliningContext;
 class VariableLivenessAnalysis;
 
 class BlockIterator : public ValueObject {
@@ -130,7 +128,9 @@ class FlowGraph : public ZoneAllocated {
   }
 
   intptr_t CurrentContextEnvIndex() const {
-    return EnvIndex(parsed_function().current_context_var());
+    return FLAG_use_bytecode_compiler
+               ? -1
+               : EnvIndex(parsed_function().current_context_var());
   }
 
   intptr_t RawTypeArgumentEnvIndex() const {
@@ -144,6 +144,10 @@ class FlowGraph : public ZoneAllocated {
   intptr_t EnvIndex(const LocalVariable* variable) const {
     ASSERT(!variable->is_captured());
     return num_direct_parameters_ - variable->index().value();
+  }
+
+  bool IsEntryPoint(BlockEntryInstr* target) const {
+    return graph_entry()->IsEntryPoint(target);
   }
 
   // Flow graph orders.
@@ -176,6 +180,8 @@ class FlowGraph : public ZoneAllocated {
                                 intptr_t deopt_id,
                                 TokenPosition token_pos);
 
+  void AddExactnessGuard(InstanceCallInstr* call, intptr_t receiver_cid);
+
   intptr_t current_ssa_temp_index() const { return current_ssa_temp_index_; }
   void set_current_ssa_temp_index(intptr_t index) {
     current_ssa_temp_index_ = index;
@@ -185,8 +191,13 @@ class FlowGraph : public ZoneAllocated {
     return current_ssa_temp_index();
   }
 
-  bool InstanceCallNeedsClassCheck(InstanceCallInstr* call,
-                                   RawFunction::Kind kind) const;
+  enum class ToCheck { kNoCheck, kCheckNull, kCheckCid };
+
+  // Uses CHA to determine if the called method can be overridden.
+  // Return value indicates that the call needs no check at all,
+  // just a null check, or a full class check.
+  ToCheck CheckForInstanceCall(InstanceCallInstr* call,
+                               RawFunction::Kind kind) const;
 
   Thread* thread() const { return thread_; }
   Zone* zone() const { return thread()->zone(); }
@@ -316,6 +327,10 @@ class FlowGraph : public ZoneAllocated {
   // Returns true if any instructions were canonicalized away.
   bool Canonicalize();
 
+  // Attaches new ICData's to static/instance calls which don't already have
+  // them.
+  void PopulateWithICData(const Function& function);
+
   void SelectRepresentations();
 
   void WidenSmiToInt32();
@@ -425,7 +440,6 @@ class FlowGraph : public ZoneAllocated {
 
   void InsertConversionsFor(Definition* def);
   void ConvertUse(Value* use, Representation from);
-  void ConvertEnvironmentUse(Value* use, Representation from);
   void InsertConversion(Representation from,
                         Representation to,
                         Value* use,

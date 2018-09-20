@@ -188,8 +188,17 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
       if (previousMember.leftBracket == null ||
           previousMember.leftBracket.isSynthetic) {
         // If the prior member is an unfinished class declaration
-        // then the user is probably finishing that
+        // then the user is probably finishing that.
         _addClassDeclarationKeywords(previousMember);
+        return;
+      }
+    }
+    if (previousMember is MixinDeclaration) {
+      if (previousMember.leftBracket == null ||
+          previousMember.leftBracket.isSynthetic) {
+        // If the prior member is an unfinished mixin declaration
+        // then the user is probably finishing that.
+        _addMixinDeclarationKeywords(previousMember);
         return;
       }
     }
@@ -232,9 +241,23 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
       if (entity is ConstructorInitializer) {
         _addSuggestion(Keyword.ASSERT);
       }
-      if (node.initializers.last == entity) {
-        _addSuggestion(Keyword.SUPER);
-        _addSuggestion(Keyword.THIS);
+      var last = node.initializers.last;
+      if (last == entity) {
+        Token previous = node.findPrevious(last.beginToken);
+        if (previous != null && previous.end <= request.offset) {
+          _addSuggestion(Keyword.SUPER);
+          _addSuggestion(Keyword.THIS);
+        }
+      }
+    } else {
+      Token separator = node.separator;
+      if (separator != null) {
+        var offset = request.offset;
+        if (separator.end <= offset && offset <= separator.next.offset) {
+          _addSuggestion(Keyword.ASSERT);
+          _addSuggestion(Keyword.SUPER);
+          _addSuggestion(Keyword.THIS);
+        }
       }
     }
   }
@@ -363,9 +386,18 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
   @override
   visitIfStatement(IfStatement node) {
     if (_isPreviousTokenSynthetic(entity, TokenType.CLOSE_PAREN)) {
+      // analyzer parser
       // Actual: if (x i^)
       // Parsed: if (x) i^
       _addSuggestion(Keyword.IS, DART_RELEVANCE_HIGH);
+    } else if (entity == node.rightParenthesis) {
+      if (node.condition.endToken.next == droppedToken) {
+        // fasta parser
+        // Actual: if (x i^)
+        // Parsed: if (x)
+        //    where "i" is in the token stream but not part of the AST
+        _addSuggestion(Keyword.IS, DART_RELEVANCE_HIGH);
+      }
     } else if (entity == node.thenStatement || entity == node.elseStatement) {
       _addStatementKeywords(node);
     } else if (entity == node.condition) {
@@ -437,6 +469,28 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
       // no keywords in '.' expression
     } else {
       super.visitMethodInvocation(node);
+    }
+  }
+
+  @override
+  visitMixinDeclaration(MixinDeclaration node) {
+    // Don't suggest mixin name
+    if (entity == node.name) {
+      return;
+    }
+    if (entity == node.rightBracket) {
+      _addClassBodyKeywords();
+    } else if (entity is ClassMember) {
+      _addClassBodyKeywords();
+      int index = node.members.indexOf(entity);
+      ClassMember previous = index > 0 ? node.members[index - 1] : null;
+      if (previous is MethodDeclaration && isEmptyBody(previous.body)) {
+        _addSuggestion(Keyword.ASYNC);
+        _addSuggestion2(ASYNC_STAR);
+        _addSuggestion2(SYNC_STAR);
+      }
+    } else {
+      _addMixinDeclarationKeywords(node);
     }
   }
 
@@ -618,6 +672,17 @@ class _KeywordVisitor extends GeneralizingAstVisitor {
         _addSuggestion(Keyword.SHOW, DART_RELEVANCE_HIGH);
         _addSuggestion(Keyword.HIDE, DART_RELEVANCE_HIGH);
       }
+    }
+  }
+
+  void _addMixinDeclarationKeywords(MixinDeclaration node) {
+    // Very simplistic suggestion because analyzer will warn if
+    // the on / implements clauses are out of order
+    if (node.onClause == null) {
+      _addSuggestion(Keyword.ON, DART_RELEVANCE_HIGH);
+    }
+    if (node.implementsClause == null) {
+      _addSuggestion(Keyword.IMPLEMENTS, DART_RELEVANCE_HIGH);
     }
   }
 

@@ -126,6 +126,7 @@ abstract class Directory implements FileSystemEntity {
    * If [path] is an absolute path, it will be immune to changes to the
    * current working directory.
    */
+  @pragma("vm:entry-point")
   factory Directory(String path) {
     final IOOverrides overrides = IOOverrides.current;
     if (overrides == null) {
@@ -134,6 +135,7 @@ abstract class Directory implements FileSystemEntity {
     return overrides.createDirectory(path);
   }
 
+  @pragma("vm:entry-point")
   factory Directory.fromRawPath(Uint8List path) {
     // TODO(bkonyi): Handle overrides.
     return new _Directory.fromRawPath(path);

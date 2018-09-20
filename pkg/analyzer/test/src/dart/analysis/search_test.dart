@@ -73,7 +73,7 @@ class SearchTest extends BaseAnalysisDriverTest {
   CompilationUnitElement testUnitElement;
   LibraryElement testLibraryElement;
 
-  test_classMembers() async {
+  test_classMembers_class() async {
     await _resolveTestUnit('''
 class A {
   test() {}
@@ -99,6 +99,25 @@ import 'not-dart.txt';
     expect(await driver.search.classMembers('test'), isEmpty);
   }
 
+  test_classMembers_mixin() async {
+    await _resolveTestUnit('''
+mixin A {
+  test() {}
+}
+mixin B {
+  int test = 1;
+  int testTwo = 2;
+  main() {
+    int test = 3;
+  }
+}
+''');
+    ClassElement a = _findElement('A');
+    ClassElement b = _findElement('B');
+    expect(await driver.search.classMembers('test'),
+        unorderedEquals([a.methods[0], b.fields[0]]));
+  }
+
   test_declarations_class() async {
     await _resolveTestUnit('''
 class C {
@@ -116,7 +135,7 @@ class C {
     _assertHasDeclaration(declarations, 'C', DeclarationKind.CLASS,
         offset: 6, codeOffset: 0, codeLength: 91);
     _assertHasDeclaration(declarations, 'f', DeclarationKind.FIELD,
-        offset: 16, codeOffset: 12, codeLength: 6, className: 'C');
+        offset: 16, codeOffset: 12, codeLength: 5, className: 'C');
     _assertHasDeclaration(declarations, '', DeclarationKind.CONSTRUCTOR,
         offset: 21, codeOffset: 21, codeLength: 4, className: 'C');
     _assertHasDeclaration(declarations, 'named', DeclarationKind.CONSTRUCTOR,
@@ -197,6 +216,30 @@ class C {}
     List<Declaration> declarations =
         await driver.search.declarations(null, 2, files);
     expect(declarations, hasLength(2));
+  }
+
+  test_declarations_mixin() async {
+    await _resolveTestUnit('''
+mixin M {
+  int f;
+  int get g => 0;
+  void set s(_) {}
+  void m() {}
+}
+''');
+    var files = new LinkedHashSet<String>();
+    List<Declaration> declarations =
+        await driver.search.declarations(null, null, files);
+    _assertHasDeclaration(declarations, 'M', DeclarationKind.MIXIN,
+        offset: 6, codeOffset: 0, codeLength: 71);
+    _assertHasDeclaration(declarations, 'f', DeclarationKind.FIELD,
+        offset: 16, codeOffset: 12, codeLength: 5, mixinName: 'M');
+    _assertHasDeclaration(declarations, 'g', DeclarationKind.GETTER,
+        offset: 29, codeOffset: 21, codeLength: 15, mixinName: 'M');
+    _assertHasDeclaration(declarations, 's', DeclarationKind.SETTER,
+        offset: 48, codeOffset: 39, codeLength: 16, mixinName: 'M');
+    _assertHasDeclaration(declarations, 'm', DeclarationKind.METHOD,
+        offset: 63, codeOffset: 58, codeLength: 11, mixinName: 'M');
   }
 
   test_declarations_onlyForFile() async {
@@ -362,7 +405,7 @@ typedef tf2<T> = int Function<S>(T tp, S sp);
       codeLength: 16,
     );
     _assertHasDeclaration(declarations, 'v', DeclarationKind.VARIABLE,
-        offset: 54, codeOffset: 50, codeLength: 6);
+        offset: 54, codeOffset: 50, codeLength: 5);
     _assertHasDeclaration(
         declarations, 'tf1', DeclarationKind.FUNCTION_TYPE_ALIAS,
         offset: 70, codeOffset: 57, codeLength: 19);
@@ -448,6 +491,55 @@ typedef tf2<T> = int Function<S>(T tp, S sp);
     assertHasResult(b, 'b', not: true);
   }
 
+  test_references_discover_onlyOwned_samePath() async {
+    var p = _p('/test/lib/t.dart');
+    provider.newFile(p, 'int t;');
+
+    var driver1 = createAnalysisDriver(packageMap: {
+      'test': [provider.newFolder(_p('/test/lib'))]
+    });
+    var driver2 = createAnalysisDriver(packageMap: {});
+
+    var searchedFiles = new SearchedFiles();
+    searchedFiles.ownAdded(driver1.search);
+    searchedFiles.ownAdded(driver2.search); // does not own any file, but...
+
+    // driver1 owns both path and URI.
+    expect(searchedFiles.add(p, driver1.search), isTrue);
+
+    // The path is already owned by driver1, so cannot be handled in driver2.
+    expect(searchedFiles.add(p, driver2.search), isFalse);
+  }
+
+  test_references_discover_onlyOwned_sameUri() async {
+    var a = _p('/aaa/lib/t.dart');
+    var b = _p('/bbb/lib/t.dart');
+
+    provider.newFile(a, 'int t;');
+    provider.newFile(b, 'double t;');
+
+    var driver1 = createAnalysisDriver(packageMap: {
+      'ttt': [provider.newFolder(_p('/aaa/lib'))]
+    });
+    var driver2 = createAnalysisDriver(packageMap: {
+      'ttt': [provider.newFolder(_p('/bbb/lib'))]
+    });
+
+    // driver1 owns `/aaa/lib/t.dart` with `package:ttt/t.dart`.
+    driver1.addFile(a);
+
+    var searchedFiles = new SearchedFiles();
+
+    searchedFiles.ownAdded(driver1.search);
+    searchedFiles.ownAdded(driver2.search); // does not own any file, but...
+
+    // driver1 owns both path and URI.
+    expect(searchedFiles.add(a, driver1.search), isTrue);
+
+    // The URI is already owned by driver1, so cannot be handled in driver2.
+    expect(searchedFiles.add(b, driver2.search), isFalse);
+  }
+
   test_searchMemberReferences_qualified_resolved() async {
     await _resolveTestUnit('''
 class C {
@@ -529,7 +621,7 @@ Random v2;
     {
       String randomPath = sdk.mapDartUri('dart:math').fullName;
       AnalysisResult result = await driver.getResult(randomPath);
-      randomElement = result.unit.element.getType('Random');
+      randomElement = result.unit.declaredElement.getType('Random');
     }
 
     Element v1 = _findElement('v1');
@@ -603,6 +695,19 @@ main(A p) {
     var expected = [
       _expectId(p, SearchResultKind.REFERENCE, 'A p'),
       _expectId(main, SearchResultKind.REFERENCE, 'A v')
+    ];
+    await _verifyReferences(element, expected);
+  }
+
+  test_searchReferences_ClassElement_mixin() async {
+    await _resolveTestUnit('''
+mixin A {}
+class B extends Object with A {} // with
+''');
+    ClassElement element = _findElementAtString('A {}');
+    Element b = _findElement('B');
+    var expected = [
+      _expectId(b, SearchResultKind.REFERENCE, 'A {} // with'),
     ];
     await _verifyReferences(element, expected);
   }
@@ -1381,7 +1486,7 @@ _C v1;
 
     AnalysisResult result = await driver.getResult(p);
     testUnit = result.unit;
-    testUnitElement = testUnit.element;
+    testUnitElement = testUnit.declaredElement;
     testLibraryElement = testUnitElement.library;
 
     ClassElement element = testLibraryElement.parts[0].types[0];
@@ -1593,6 +1698,22 @@ class C implements T {} // C
     await _verifyReferences(element, expected);
   }
 
+  test_searchSubtypes_mixinDeclaration() async {
+    await _resolveTestUnit('''
+class T {}
+mixin A on T {} // A
+mixin B implements T {} // B
+''');
+    ClassElement element = _findElement('T');
+    ClassElement a = _findElement('A');
+    ClassElement b = _findElement('B');
+    var expected = [
+      _expectId(a, SearchResultKind.REFERENCE, 'T {} // A'),
+      _expectId(b, SearchResultKind.REFERENCE, 'T {} // B'),
+    ];
+    await _verifyReferences(element, expected);
+  }
+
   test_subtypes() async {
     await _resolveTestUnit('''
 class A {}
@@ -1644,23 +1765,6 @@ class F {}
       SubtypeResult e = subtypes.singleWhere((r) => r.name == 'E');
       expect(e.members, ['methodE']);
     }
-  }
-
-  test_subtypes_partWithoutLibrary() async {
-    await _resolveTestUnit('''
-part of lib;
-
-class A {}
-class B extends A {}
-''');
-    ClassElement a = _findElement('A');
-
-    List<SubtypeResult> subtypes = await driver.search.subtypes(type: a);
-    expect(subtypes, hasLength(1));
-
-    SubtypeResult b = subtypes.singleWhere((r) => r.name == 'B');
-    expect(b.libraryUri, testUri);
-    expect(b.id, '$testUri;$testUri;B');
   }
 
   test_subtypes_discover() async {
@@ -1790,35 +1894,59 @@ class A {}
     expect(c.id, endsWith('c.dart;C'));
   }
 
+  test_subtypes_partWithoutLibrary() async {
+    await _resolveTestUnit('''
+part of lib;
+
+class A {}
+class B extends A {}
+''');
+    ClassElement a = _findElement('A');
+
+    List<SubtypeResult> subtypes = await driver.search.subtypes(type: a);
+    expect(subtypes, hasLength(1));
+
+    SubtypeResult b = subtypes.singleWhere((r) => r.name == 'B');
+    expect(b.libraryUri, testUri);
+    expect(b.id, '$testUri;$testUri;B');
+  }
+
   test_topLevelElements() async {
     await _resolveTestUnit('''
 class A {} // A
 class B = Object with A;
-typedef C();
-D() {}
-var e = null;
-class NoMatchABCDE {}
+mixin C {}
+typedef D();
+e() {}
+var f = null;
+class NoMatchABCDEF {}
 ''');
     Element a = _findElement('A');
     Element b = _findElement('B');
     Element c = _findElement('C');
     Element d = _findElement('D');
     Element e = _findElement('e');
-    RegExp regExp = new RegExp(r'^[ABCDe]$');
+    Element f = _findElement('f');
+    RegExp regExp = new RegExp(r'^[ABCDef]$');
     expect(await driver.search.topLevelElements(regExp),
-        unorderedEquals([a, b, c, d, e]));
+        unorderedEquals([a, b, c, d, e, f]));
   }
 
   Declaration _assertHasDeclaration(
       List<Declaration> declarations, String name, DeclarationKind kind,
-      {int offset, int codeOffset, int codeLength, String className}) {
+      {int offset,
+      int codeOffset,
+      int codeLength,
+      String className,
+      String mixinName}) {
     for (var declaration in declarations) {
       if (declaration.name == name &&
           declaration.kind == kind &&
           (offset == null || declaration.offset == offset) &&
           (codeOffset == null || declaration.codeOffset == codeOffset) &&
           (codeLength == null || declaration.codeLength == codeLength) &&
-          declaration.className == className) {
+          declaration.className == className &&
+          declaration.mixinName == mixinName) {
         return declaration;
       }
     }
@@ -1879,7 +2007,7 @@ class NoMatchABCDE {}
   }
 
   Element _findElement(String name, [ElementKind kind]) {
-    return findChildElement(testUnit.element, name, kind);
+    return findChildElement(testUnit.declaredElement, name, kind);
   }
 
   Element _findElementAtString(String search) {
@@ -1900,7 +2028,7 @@ class NoMatchABCDE {}
     if (testUnit == null) {
       AnalysisResult result = await driver.getResult(testFile);
       testUnit = result.unit;
-      testUnitElement = testUnit.element;
+      testUnitElement = testUnit.declaredElement;
       testLibraryElement = testUnitElement.library;
     }
   }

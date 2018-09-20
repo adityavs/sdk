@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 #include "vm/globals.h"
-#if defined(DART_USE_INTERPRETER)
+#if !defined(DART_PRECOMPILED_RUNTIME)
 
 #include "vm/compiler/assembler/disassembler_kbc.h"
 
@@ -212,8 +212,7 @@ static bool HasLoadFromPool(KBCInstr instr) {
     case KernelBytecode::kPushConstant:
     case KernelBytecode::kStaticCall:
     case KernelBytecode::kIndirectStaticCall:
-    case KernelBytecode::kInstanceCall1:
-    case KernelBytecode::kInstanceCall2:
+    case KernelBytecode::kInstanceCall:
     case KernelBytecode::kInstanceCall1Opt:
     case KernelBytecode::kInstanceCall2Opt:
     case KernelBytecode::kStoreStaticTOS:
@@ -353,6 +352,17 @@ void KernelBytecodeDisassembler::Disassemble(const Function& function) {
   const ObjectPool& object_pool =
       ObjectPool::Handle(zone, bytecode.GetObjectPool());
   object_pool.DebugPrint();
+
+  THR_Print("PC Descriptors for function '%s' {\n", function_fullname);
+  PcDescriptors::PrintHeaderString();
+  const PcDescriptors& descriptors =
+      PcDescriptors::Handle(zone, bytecode.pc_descriptors());
+  THR_Print("%s}\n", descriptors.ToCString());
+
+  THR_Print("Exception Handlers for function '%s' {\n", function_fullname);
+  const ExceptionHandlers& handlers =
+      ExceptionHandlers::Handle(zone, bytecode.exception_handlers());
+  THR_Print("%s}\n", handlers.ToCString());
 #else
   UNREACHABLE();
 #endif
@@ -360,4 +370,4 @@ void KernelBytecodeDisassembler::Disassemble(const Function& function) {
 
 }  // namespace dart
 
-#endif  // defined(DART_USE_INTERPRETER)
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)

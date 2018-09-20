@@ -63,12 +63,11 @@ abstract class GraphBuilder {
 
   CompilerOptions get options => compiler.options;
 
-  CommonElements get commonElements => closedWorld.commonElements;
+  JCommonElements get commonElements => closedWorld.commonElements;
 
   CodeEmitterTask get emitter => backend.emitter;
 
-  GlobalTypeInferenceResults get globalInferenceResults =>
-      compiler.globalInference.results;
+  GlobalTypeInferenceResults get globalInferenceResults;
 
   ClosureDataLookup get closureDataLookup =>
       compiler.backendStrategy.closureDataLookup;
@@ -89,11 +88,9 @@ abstract class GraphBuilder {
 
   RuntimeTypesEncoder get rtiEncoder => backend.rtiEncoder;
 
-  FunctionInlineCache get inlineCache => backend.inlineCache;
-
   JsInteropAnalysis get jsInteropAnalysis => backend.jsInteropAnalysis;
 
-  InferredData get inferredData => compiler.globalInference.inferredData;
+  InferredData get inferredData => globalInferenceResults.inferredData;
 
   DeferredLoadTask get deferredLoadTask => compiler.deferredLoadTask;
 
@@ -291,14 +288,14 @@ abstract class GraphBuilder {
   /// concrete SSA builder reports an error.
   bool getFlagValue(String flagName) {
     switch (flagName) {
+      case 'IS_FULL_EMITTER':
+        return !options.useStartupEmitter;
+      case 'MINIFIED':
+        return options.enableMinification;
       case 'MUST_RETAIN_METADATA':
         return false;
       case 'USE_CONTENT_SECURITY_POLICY':
         return options.useContentSecurityPolicy;
-      case 'IS_FULL_EMITTER':
-        return !options.useStartupEmitter;
-      case 'STRONG_MODE':
-        return options.strongMode;
       default:
         return null;
     }

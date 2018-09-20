@@ -11,8 +11,10 @@ import 'package:analyzer/dart/ast/token.dart';
 import 'package:analyzer/error/listener.dart';
 import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/dart/analysis/defined_names.dart';
+import 'package:analyzer/src/dart/analysis/one_phase_summaries_selector.dart';
 import 'package:analyzer/src/dart/analysis/referenced_names.dart';
 import 'package:analyzer/src/dart/analysis/top_level_declaration.dart';
+import 'package:analyzer/src/dart/analysis/unlinked_api_signature.dart';
 import 'package:analyzer/src/dart/scanner/reader.dart';
 import 'package:analyzer/src/dart/scanner/scanner.dart';
 import 'package:analyzer/src/generated/engine.dart';
@@ -124,8 +126,6 @@ class FileState {
   Set<String> _definedClassMemberNames;
   Set<String> _definedTopLevelNames;
   Set<String> _referencedNames;
-  Set<String> _subtypedNames;
-  String _unlinkedKey;
   AnalysisDriverUnlinkedUnit _driverUnlinkedUnit;
   UnlinkedUnit _unlinked;
   List<int> _apiSignature;
@@ -133,6 +133,7 @@ class FileState {
   List<FileState> _importedFiles;
   List<FileState> _exportedFiles;
   List<FileState> _partedFiles;
+  List<FileState> _libraryFiles;
   List<NameFilter> _exportFilters;
 
   Set<FileState> _directReferencedFiles = new Set<FileState>();
@@ -246,6 +247,12 @@ class FileState {
   }
 
   /**
+   * The list of files files that this library consists of, i.e. this library
+   * file itself and its [partedFiles].
+   */
+  List<FileState> get libraryFiles => _libraryFiles;
+
+  /**
    * Return information about line in the file.
    */
   LineInfo get lineInfo => _lineInfo;
@@ -260,14 +267,6 @@ class FileState {
    */
   Set<String> get referencedNames {
     return _referencedNames ??= _driverUnlinkedUnit.referencedNames.toSet();
-  }
-
-  /**
-   * The names which are used in `extends`, `with` or `implements` clauses in
-   * the file. Import prefixes and type arguments are not included.
-   */
-  Set<String> get subtypedNames {
-    return _subtypedNames ??= _driverUnlinkedUnit.subtypedNames.toSet();
   }
 
   @visibleForTesting
@@ -348,7 +347,7 @@ class FileState {
   String get transitiveSignature {
     if (_transitiveSignature == null) {
       ApiSignature signature = new ApiSignature();
-      signature.addUint32List(_fsState._salt);
+      signature.addUint32List(_fsState._linkedSalt);
       signature.addInt(transitiveFiles.length);
       transitiveFiles
           .map((file) => file.apiSignature)
@@ -379,7 +378,8 @@ class FileState {
    *
    * If an exception happens during parsing, an empty unit is returned.
    */
-  CompilationUnit parse(AnalysisErrorListener errorListener) {
+  CompilationUnit parse([AnalysisErrorListener errorListener]) {
+    errorListener ??= AnalysisErrorListener.NULL_LISTENER;
     try {
       return PerformanceStatistics.parse.makeCurrentWhile(() {
         return _parse(errorListener);
@@ -403,6 +403,8 @@ class FileState {
    * Return `true` if the API signature changed since the last refresh.
    */
   bool refresh({bool allowCached: false}) {
+    _invalidateCurrentUnresolvedData();
+
     {
       var rawFileState = _fsState._fileContentCache.get(path, allowCached);
       _content = rawFileState.content;
@@ -410,26 +412,38 @@ class FileState {
       _contentHash = rawFileState.contentHash;
     }
 
-    // Prepare the unlinked bundle key.
+    // Prepare keys of unlinked data.
+    String apiSignatureKey;
+    String unlinkedKey;
     {
-      ApiSignature signature = new ApiSignature();
-      signature.addUint32List(_fsState._salt);
+      var signature = new ApiSignature();
+      signature.addUint32List(_fsState._unlinkedSalt);
       signature.addString(_contentHash);
-      _unlinkedKey = '${signature.toHex()}.unlinked';
+
+      var signatureHex = signature.toHex();
+      apiSignatureKey = '$signatureHex.api_signature';
+      unlinkedKey = '$signatureHex.unlinked';
     }
 
-    // Prepare bytes of the unlinked bundle - existing or new.
-    List<int> bytes;
-    {
-      bytes = _fsState._byteStore.get(_unlinkedKey);
-      if (bytes == null || bytes.isEmpty) {
-        CompilationUnit unit = parse(AnalysisErrorListener.NULL_LISTENER);
-        _fsState._logger.run('Create unlinked for $path', () {
-          UnlinkedUnitBuilder unlinkedUnit = serializeAstUnlinked(unit);
-          DefinedNames definedNames = computeDefinedNames(unit);
-          List<String> referencedNames = computeReferencedNames(unit).toList();
-          List<String> subtypedNames = computeSubtypedNames(unit).toList();
-          bytes = new AnalysisDriverUnlinkedUnitBuilder(
+    // Try to get bytes of unlinked data.
+    var apiSignatureBytes = _fsState._byteStore.get(apiSignatureKey);
+    var unlinkedUnitBytes = _fsState._byteStore.get(unlinkedKey);
+
+    // Compute unlinked data that we are missing.
+    if (apiSignatureBytes == null || unlinkedUnitBytes == null) {
+      CompilationUnit unit = parse(AnalysisErrorListener.NULL_LISTENER);
+      _fsState._logger.run('Create unlinked for $path', () {
+        if (apiSignatureBytes == null) {
+          apiSignatureBytes = computeUnlinkedApiSignature(unit);
+          _fsState._byteStore.put(apiSignatureKey, apiSignatureBytes);
+        }
+        if (unlinkedUnitBytes == null) {
+          var unlinkedUnit = serializeAstUnlinked(unit,
+              serializeInferrableFields: !enableOnePhaseSummaries);
+          var definedNames = computeDefinedNames(unit);
+          var referencedNames = computeReferencedNames(unit).toList();
+          var subtypedNames = computeSubtypedNames(unit).toList();
+          unlinkedUnitBytes = new AnalysisDriverUnlinkedUnitBuilder(
                   unit: unlinkedUnit,
                   definedTopLevelNames: definedNames.topLevelNames.toList(),
                   definedClassMemberNames:
@@ -437,28 +451,21 @@ class FileState {
                   referencedNames: referencedNames,
                   subtypedNames: subtypedNames)
               .toBuffer();
-          _fsState._byteStore.put(_unlinkedKey, bytes);
-        });
-      }
+          _fsState._byteStore.put(unlinkedKey, unlinkedUnitBytes);
+        }
+      });
     }
 
     // Read the unlinked bundle.
-    _driverUnlinkedUnit = new AnalysisDriverUnlinkedUnit.fromBuffer(bytes);
+    _driverUnlinkedUnit =
+        new AnalysisDriverUnlinkedUnit.fromBuffer(unlinkedUnitBytes);
     _unlinked = _driverUnlinkedUnit.unit;
     _lineInfo = new LineInfo(_unlinked.lineStarts);
 
-    // Invalidate unlinked information.
-    _definedTopLevelNames = null;
-    _definedClassMemberNames = null;
-    _referencedNames = null;
-    _subtypedNames = null;
-    _topLevelDeclarations = null;
-
     // Prepare API signature.
-    List<int> newApiSignature = new Uint8List.fromList(_unlinked.apiSignature);
     bool apiSignatureChanged = _apiSignature != null &&
-        !_equalByteLists(_apiSignature, newApiSignature);
-    _apiSignature = newApiSignature;
+        !_equalByteLists(_apiSignature, apiSignatureBytes);
+    _apiSignature = apiSignatureBytes;
 
     // The API signature changed.
     //   Flush transitive signatures of affected files.
@@ -505,6 +512,7 @@ class FileState {
           .putIfAbsent(file, () => <FileState>[])
           .add(this);
     }
+    _libraryFiles = [this]..addAll(_partedFiles);
 
     // Compute referenced files.
     Set<FileState> oldDirectReferencedFiles = _directReferencedFiles;
@@ -524,6 +532,16 @@ class FileState {
           file._transitiveFiles = null;
         }
       }
+    }
+
+    // Update mapping from subtyped names to files.
+    for (var name in _driverUnlinkedUnit.subtypedNames) {
+      var files = _fsState._subtypedNameToFiles[name];
+      if (files == null) {
+        files = new Set<FileState>();
+        _fsState._subtypedNameToFiles[name] = files;
+      }
+      files.add(this);
     }
 
     // Return whether the API signature changed.
@@ -583,9 +601,8 @@ class FileState {
     _exportDeclarationsId = 0;
 
     // Append the library declarations.
-    declarations.addAll(topLevelDeclarations);
-    for (FileState part in partedFiles) {
-      declarations.addAll(part.topLevelDeclarations);
+    for (FileState file in libraryFiles) {
+      declarations.addAll(file.topLevelDeclarations);
     }
 
     // Record the declarations only if it is the full result.
@@ -622,6 +639,25 @@ class FileState {
     return _fsState.getFileForUri(absoluteUri);
   }
 
+  /**
+   * Invalidate any data that depends on the current unlinked data of the file,
+   * because [refresh] is going to recompute the unlinked data.
+   */
+  void _invalidateCurrentUnresolvedData() {
+    // Invalidate unlinked information.
+    _definedTopLevelNames = null;
+    _definedClassMemberNames = null;
+    _referencedNames = null;
+    _topLevelDeclarations = null;
+
+    if (_driverUnlinkedUnit != null) {
+      for (var name in _driverUnlinkedUnit.subtypedNames) {
+        var files = _fsState._subtypedNameToFiles[name];
+        files?.remove(this);
+      }
+    }
+  }
+
   CompilationUnit _parse(AnalysisErrorListener errorListener) {
     if (source == null) {
       return _createEmptyCompilationUnit();
@@ -630,7 +666,6 @@ class FileState {
     AnalysisOptions analysisOptions = _fsState._analysisOptions;
     CharSequenceReader reader = new CharSequenceReader(content);
     Scanner scanner = new Scanner(source, reader, errorListener);
-    scanner.scanGenericMethodComments = analysisOptions.strongMode;
     Token token = PerformanceStatistics.scan.makeCurrentWhile(() {
       return scanner.tokenize();
     });
@@ -638,8 +673,7 @@ class FileState {
 
     bool useFasta = analysisOptions.useFastaParser;
     Parser parser = new Parser(source, errorListener, useFasta: useFasta);
-    parser.enableOptionalNewAndConst = analysisOptions.previewDart2;
-    parser.parseGenericMethodComments = analysisOptions.strongMode;
+    parser.enableOptionalNewAndConst = true;
     CompilationUnit unit = parser.parseCompilationUnit(token);
     unit.lineInfo = lineInfo;
 
@@ -676,8 +710,6 @@ class FileStateTestView {
   final FileState file;
 
   FileStateTestView(this.file);
-
-  String get unlinkedKey => file._unlinkedKey;
 }
 
 /**
@@ -690,7 +722,8 @@ class FileSystemState {
   final FileContentOverlay _contentOverlay;
   final SourceFactory _sourceFactory;
   final AnalysisOptions _analysisOptions;
-  final Uint32List _salt;
+  final Uint32List _unlinkedSalt;
+  final Uint32List _linkedSalt;
 
   /**
    * The optional store with externally provided unlinked and corresponding
@@ -748,6 +781,11 @@ class FileSystemState {
   final Map<FileState, List<FileState>> _partToLibraries = {};
 
   /**
+   * The map of subtyped names to files where these names are subtyped.
+   */
+  final Map<String, Set<FileState>> _subtypedNameToFiles = {};
+
+  /**
    * The value of this field is incremented when the set of files is updated.
    */
   int fileStamp = 0;
@@ -766,15 +804,17 @@ class FileSystemState {
   FileSystemStateTestView _testView;
 
   FileSystemState(
-      this._logger,
-      this._byteStore,
-      this._contentOverlay,
-      this._resourceProvider,
-      this._sourceFactory,
-      this._analysisOptions,
-      this._salt,
-      {this.externalSummaries,
-      this.parseExceptionHandler}) {
+    this._logger,
+    this._byteStore,
+    this._contentOverlay,
+    this._resourceProvider,
+    this._sourceFactory,
+    this._analysisOptions,
+    this._unlinkedSalt,
+    this._linkedSalt, {
+    this.externalSummaries,
+    this.parseExceptionHandler,
+  }) {
     _fileContentCache =
         _FileContentCache.getInstance(_resourceProvider, _contentOverlay);
     _testView = new FileSystemStateTestView(this);
@@ -815,9 +855,9 @@ class FileSystemState {
         return file;
       }
       // Create a new file.
-      Uri fileUri = _resourceProvider.pathContext.toUri(path);
       FileSource uriSource = new FileSource(resource, uri);
-      file = new FileState._(this, path, uri, fileUri, uriSource);
+      file = new FileState._(
+          this, path, uri, _absolutePathToFileUri(path), uriSource);
       _uriToFile[uri] = file;
       _addFileWithPath(path, file);
       _pathToCanonicalFile[path] = file;
@@ -856,9 +896,9 @@ class FileSystemState {
 
       String path = uriSource.fullName;
       File resource = _resourceProvider.getFile(path);
-      Uri fileUri = _resourceProvider.pathContext.toUri(path);
       FileSource source = new FileSource(resource, uri);
-      file = new FileState._(this, path, uri, fileUri, source);
+      file = new FileState._(
+          this, path, uri, _absolutePathToFileUri(path), source);
       _uriToFile[uri] = file;
       _addFileWithPath(path, file);
       file.refresh(allowCached: true);
@@ -882,6 +922,14 @@ class FileSystemState {
   }
 
   /**
+   * Return files where the given [name] is subtyped, i.e. used in `extends`,
+   * `with` or `implements` clauses.
+   */
+  Set<FileState> getFilesSubtypingName(String name) {
+    return _subtypedNameToFiles[name];
+  }
+
+  /**
    * Return `true` if there is a URI that can be resolved to the [path].
    *
    * When a file exists, but for the URI that corresponds to the file is
@@ -895,7 +943,7 @@ class FileSystemState {
       Source fileSource = resource.createSource();
       Uri uri = _sourceFactory.restoreUri(fileSource);
       Source uriSource = _sourceFactory.forUri2(uri);
-      flag = uriSource.fullName == path;
+      flag = uriSource?.fullName == path;
       _hasUriForPath[path] = flag;
     }
     return flag;
@@ -920,6 +968,19 @@ class FileSystemState {
     _pathToFiles.clear();
     _pathToCanonicalFile.clear();
     _partToLibraries.clear();
+    _subtypedNameToFiles.clear();
+  }
+
+  /**
+   * A specialized version of package:path context.toUri(). This assumes the
+   * path is absolute as does a performant conversion to a file: uri.
+   */
+  Uri _absolutePathToFileUri(String path) {
+    if (path.contains(r'\')) {
+      return new Uri(scheme: 'file', path: path.replaceAll(r'\', '/'));
+    } else {
+      return new Uri(scheme: 'file', path: path);
+    }
   }
 
   void _addFileWithPath(String path, FileState file) {

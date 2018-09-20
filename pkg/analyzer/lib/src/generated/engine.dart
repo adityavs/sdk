@@ -93,6 +93,7 @@ abstract class AnalysisContext {
   /**
    * An empty list of contexts.
    */
+  @deprecated
   static const List<AnalysisContext> EMPTY_LIST = const <AnalysisContext>[];
 
   /**
@@ -1135,7 +1136,7 @@ class AnalysisNotScheduledError implements Exception {}
  */
 abstract class AnalysisOptions {
   /**
-   * The length of the list returned by [encodeCrossContextOptions].
+   * The length of the list returned by [signature].
    */
   static const int signatureLength = 4;
 
@@ -1291,7 +1292,11 @@ abstract class AnalysisOptions {
 
   /**
    * Return `true` if analyzer should enable the use of Dart 2.0 features.
+   *
+   * This getter is deprecated, and is hard-coded to always return true.
    */
+  @Deprecated(
+      'This getter is deprecated and is hard-coded to always return true.')
   bool get previewDart2;
 
   /**
@@ -1303,7 +1308,11 @@ abstract class AnalysisOptions {
 
   /**
    * Return `true` if strong mode analysis should be used.
+   *
+   * This getter is deprecated, and is hard-coded to always return true.
    */
+  @Deprecated(
+      'This getter is deprecated and is hard-coded to always return true.')
   bool get strongMode;
 
   /**
@@ -1368,11 +1377,21 @@ class AnalysisOptionsImpl implements AnalysisOptions {
   static const List<String> NONNULLABLE_TYPES = const <String>[];
 
   /**
+   * The length of the list returned by [unlinkedSignature].
+   */
+  static const int unlinkedSignatureLength = 4;
+
+  /**
    * A predicate indicating whether analysis is to parse and analyze function
    * bodies.
    */
   AnalyzeFunctionBodiesPredicate _analyzeFunctionBodiesPredicate =
       _analyzeAllFunctionBodies;
+
+  /**
+   * The cached [unlinkedSignature].
+   */
+  Uint32List _unlinkedSignature;
 
   /**
    * The cached [signature].
@@ -1383,7 +1402,7 @@ class AnalysisOptionsImpl implements AnalysisOptions {
    * A flag indicating whether declaration casts are allowed in [strongMode]
    * (they are always allowed in Dart 1.0 mode).
    *
-   * This option is experimental and subject to change.
+   * This option is deprecated and will be removed in a future release.
    */
   bool declarationCasts = true;
 
@@ -1440,8 +1459,6 @@ class AnalysisOptionsImpl implements AnalysisOptions {
   @override
   bool preserveComments = true;
 
-  bool _strongMode = true;
-
   /**
    * A flag indicating whether strong-mode inference hints should be
    * used.  This flag is not exposed in the interface, and should be
@@ -1454,14 +1471,12 @@ class AnalysisOptionsImpl implements AnalysisOptions {
   bool trackCacheDependencies = true;
 
   @override
-  bool useFastaParser = false;
-
-  @override
-  bool previewDart2 = true;
+  bool useFastaParser = true;
 
   @override
   bool disableCacheFlushing = false;
 
+  // A no-op setter.
   /**
    * A flag indicating whether implicit casts are allowed in [strongMode]
    * (they are always allowed in Dart 1.0 mode).
@@ -1489,6 +1504,12 @@ class AnalysisOptionsImpl implements AnalysisOptions {
   bool implicitDynamic = true;
 
   /**
+   * Return `true` to enable mixin declarations.
+   * https://github.com/dart-lang/language/issues/12
+   */
+  bool isMixinSupportEnabled = false;
+
+  /**
    * Initialize a newly created set of analysis options to have their default
    * values.
    */
@@ -1513,15 +1534,14 @@ class AnalysisOptionsImpl implements AnalysisOptions {
     lint = options.lint;
     lintRules = options.lintRules;
     preserveComments = options.preserveComments;
-    strongMode = options.strongMode;
     useFastaParser = options.useFastaParser;
-    previewDart2 = options.previewDart2;
     if (options is AnalysisOptionsImpl) {
       declarationCasts = options.declarationCasts;
       strongModeHints = options.strongModeHints;
       implicitCasts = options.implicitCasts;
       nonnullableTypes = options.nonnullableTypes;
       implicitDynamic = options.implicitDynamic;
+      isMixinSupportEnabled = options.isMixinSupportEnabled;
     }
     trackCacheDependencies = options.trackCacheDependencies;
     disableCacheFlushing = options.disableCacheFlushing;
@@ -1643,6 +1663,11 @@ class AnalysisOptionsImpl implements AnalysisOptions {
   }
 
   @override
+  bool get previewDart2 => true;
+
+  set previewDart2(bool value) {}
+
+  @override
   Uint32List get signature {
     if (_signature == null) {
       ApiSignature buffer = new ApiSignature();
@@ -1653,9 +1678,10 @@ class AnalysisOptionsImpl implements AnalysisOptions {
       buffer.addBool(enableSuperMixins);
       buffer.addBool(implicitCasts);
       buffer.addBool(implicitDynamic);
-      buffer.addBool(strongMode);
       buffer.addBool(strongModeHints);
       buffer.addBool(useFastaParser);
+      buffer.addBool(previewDart2);
+      buffer.addBool(isMixinSupportEnabled);
 
       // Append error processors.
       buffer.addInt(errorProcessors.length);
@@ -1683,10 +1709,30 @@ class AnalysisOptionsImpl implements AnalysisOptions {
   }
 
   @override
-  bool get strongMode => _strongMode || previewDart2;
+  bool get strongMode => true;
 
-  void set strongMode(bool value) {
-    _strongMode = value;
+  @Deprecated(
+      "The strongMode field is deprecated, and shouldn't be assigned to")
+  set strongMode(bool value) {}
+
+  /**
+   * Return the opaque signature of the options that affect unlinked data.
+   *
+   * The length of the list is guaranteed to equal [unlinkedSignatureLength].
+   */
+  Uint32List get unlinkedSignature {
+    if (_unlinkedSignature == null) {
+      ApiSignature buffer = new ApiSignature();
+
+      // Append boolean flags.
+      buffer.addBool(enableLazyAssignmentOperators);
+      buffer.addBool(useFastaParser);
+
+      // Hash and convert to Uint32List.
+      List<int> bytes = buffer.toByteList();
+      _unlinkedSignature = new Uint8List.fromList(bytes).buffer.asUint32List();
+    }
+    return _unlinkedSignature;
   }
 
   @override
@@ -1710,7 +1756,6 @@ class AnalysisOptionsImpl implements AnalysisOptions {
     nonnullableTypes = NONNULLABLE_TYPES;
     patchPaths = {};
     preserveComments = true;
-    strongMode = false;
     strongModeHints = false;
     trackCacheDependencies = true;
     useFastaParser = false;
@@ -1720,7 +1765,6 @@ class AnalysisOptionsImpl implements AnalysisOptions {
   void setCrossContextOptionsFrom(AnalysisOptions options) {
     enableLazyAssignmentOperators = options.enableLazyAssignmentOperators;
     enableSuperMixins = options.enableSuperMixins;
-    strongMode = options.strongMode;
     if (options is AnalysisOptionsImpl) {
       strongModeHints = options.strongModeHints;
     }
@@ -1972,6 +2016,7 @@ class ChangeNoticeImpl implements ChangeNotice {
   /**
    * An empty list of change notices.
    */
+  @deprecated
   static const List<ChangeNoticeImpl> EMPTY_LIST = const <ChangeNoticeImpl>[];
 
   /**
@@ -2661,14 +2706,12 @@ class ResolutionEraser extends GeneralizingAstVisitor<Object> {
   @override
   Object visitAssignmentExpression(AssignmentExpression node) {
     node.staticElement = null;
-    node.propagatedElement = null;
     return super.visitAssignmentExpression(node);
   }
 
   @override
   Object visitBinaryExpression(BinaryExpression node) {
     node.staticElement = null;
-    node.propagatedElement = null;
     return super.visitBinaryExpression(node);
   }
 
@@ -2717,7 +2760,6 @@ class ResolutionEraser extends GeneralizingAstVisitor<Object> {
   @override
   Object visitExpression(Expression node) {
     node.staticType = null;
-    node.propagatedType = null;
     return super.visitExpression(node);
   }
 
@@ -2732,14 +2774,12 @@ class ResolutionEraser extends GeneralizingAstVisitor<Object> {
   @override
   Object visitFunctionExpressionInvocation(FunctionExpressionInvocation node) {
     node.staticElement = null;
-    node.propagatedElement = null;
     return super.visitFunctionExpressionInvocation(node);
   }
 
   @override
   Object visitIndexExpression(IndexExpression node) {
     node.staticElement = null;
-    node.propagatedElement = null;
     return super.visitIndexExpression(node);
   }
 
@@ -2752,14 +2792,12 @@ class ResolutionEraser extends GeneralizingAstVisitor<Object> {
   @override
   Object visitPostfixExpression(PostfixExpression node) {
     node.staticElement = null;
-    node.propagatedElement = null;
     return super.visitPostfixExpression(node);
   }
 
   @override
   Object visitPrefixExpression(PrefixExpression node) {
     node.staticElement = null;
-    node.propagatedElement = null;
     return super.visitPrefixExpression(node);
   }
 
@@ -2775,7 +2813,6 @@ class ResolutionEraser extends GeneralizingAstVisitor<Object> {
     if (eraseDeclarations || !node.inDeclarationContext()) {
       node.staticElement = null;
     }
-    node.propagatedElement = null;
     return super.visitSimpleIdentifier(node);
   }
 

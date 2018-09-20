@@ -8,6 +8,7 @@
 #include "vm/compiler/backend/flow_graph_compiler.h"
 #include "vm/compiler/backend/inliner.h"
 #include "vm/compiler/cha.h"
+#include "vm/compiler/compiler_state.h"
 #include "vm/cpu.h"
 
 namespace dart {
@@ -212,14 +213,7 @@ bool CallSpecializer::TryCreateICData(InstanceCallInstr* call) {
   }
 
   const Token::Kind op_kind = call->token_kind();
-  if (FLAG_precompiled_mode && FLAG_strong && kBitsPerWord == 64) {
-    // Avoid speculation for AOT Dart2 64-bit targets.
-    //
-    // TODO(ajcbik): expand this to more and more targets as we
-    // investigate the performance impact of moving smi decision
-    // into a later phase.
-    //
-  } else if (FLAG_guess_icdata_cid) {
+  if (FLAG_guess_icdata_cid) {
     if (FLAG_precompiled_mode) {
       // In precompiler speculate that both sides of bitwise operation
       // are Smi-s.
@@ -359,7 +353,7 @@ void CallSpecializer::AddCheckNull(Value* to_check,
                                    intptr_t deopt_id,
                                    Environment* deopt_environment,
                                    Instruction* insert_before) {
-  ASSERT(I->strong() && FLAG_use_strong_mode_types);
+  ASSERT(I->can_use_strong_mode_types());
   if (to_check->Type()->is_nullable()) {
     CheckNullInstr* check_null =
         new (Z) CheckNullInstr(to_check->CopyWithType(Z), function_name,
@@ -564,7 +558,7 @@ bool CallSpecializer::TryReplaceWithEqualityOp(InstanceCallInstr* call,
         StrictCompareInstr* comp = new (Z)
             StrictCompareInstr(call->token_pos(), Token::kEQ_STRICT,
                                new (Z) Value(left), new (Z) Value(right),
-                               /* number_check = */ false, Thread::kNoDeoptId);
+                               /* number_check = */ false, DeoptId::kNone);
         ReplaceCall(call, comp);
         return true;
       }
@@ -879,13 +873,20 @@ bool CallSpecializer::TryInlineImplicitInstanceGetter(InstanceCallInstr* call) {
   const Field& field = Field::ZoneHandle(Z, GetField(class_ids[0], field_name));
   ASSERT(!field.IsNull());
 
-  if (flow_graph()->InstanceCallNeedsClassCheck(call,
-                                                RawFunction::kImplicitGetter)) {
-    if (FLAG_precompiled_mode) {
-      return false;
-    }
-
-    AddReceiverCheck(call);
+  switch (
+      flow_graph()->CheckForInstanceCall(call, RawFunction::kImplicitGetter)) {
+    case FlowGraph::ToCheck::kCheckNull:
+      AddCheckNull(call->Receiver(), call->function_name(), call->deopt_id(),
+                   call->env(), call);
+      break;
+    case FlowGraph::ToCheck::kCheckCid:
+      if (FLAG_precompiled_mode) {
+        return false;  // AOT cannot class check
+      }
+      AddReceiverCheck(call);
+      break;
+    case FlowGraph::ToCheck::kNoCheck:
+      break;
   }
   InlineImplicitInstanceGetter(call, field);
   return true;
@@ -916,12 +917,6 @@ bool CallSpecializer::TryInlineInstanceSetter(InstanceCallInstr* instr,
                                               const ICData& unary_ic_data) {
   ASSERT(!unary_ic_data.NumberOfChecksIs(0) &&
          (unary_ic_data.NumArgsTested() == 1));
-  if (I->argument_type_checks()) {
-    // Checked mode setters are inlined like normal methods by conventional
-    // inlining.
-    return false;
-  }
-
   ASSERT(instr->HasICData());
   if (unary_ic_data.NumberOfChecksIs(0)) {
     // No type feedback collected.
@@ -940,23 +935,44 @@ bool CallSpecializer::TryInlineInstanceSetter(InstanceCallInstr* instr,
     return false;
   }
   // Inline implicit instance setter.
-  const String& field_name =
-      String::Handle(Z, Field::NameFromSetter(instr->function_name()));
+  String& field_name = String::Handle(Z, instr->function_name().raw());
+  if (Function::IsDynamicInvocationForwaderName(field_name)) {
+    field_name = Function::DemangleDynamicInvocationForwarderName(field_name);
+  }
+  field_name = Field::NameFromSetter(field_name);
   const Field& field = Field::ZoneHandle(Z, GetField(class_id, field_name));
   ASSERT(!field.IsNull());
 
-  if (flow_graph()->InstanceCallNeedsClassCheck(instr,
-                                                RawFunction::kImplicitSetter)) {
-    if (FLAG_precompiled_mode) {
-      return false;
-    }
+  switch (
+      flow_graph()->CheckForInstanceCall(instr, RawFunction::kImplicitSetter)) {
+    case FlowGraph::ToCheck::kCheckNull:
+      AddCheckNull(instr->Receiver(), instr->function_name(), instr->deopt_id(),
+                   instr->env(), instr);
+      break;
+    case FlowGraph::ToCheck::kCheckCid:
+      if (FLAG_precompiled_mode) {
+        return false;  // AOT cannot class check
+      }
+      AddReceiverCheck(instr);
+      break;
+    case FlowGraph::ToCheck::kNoCheck:
+      break;
+  }
 
-    AddReceiverCheck(instr);
+  // True if we can use unchecked entry into the setter.
+  bool is_unchecked_call = false;
+  if (!FLAG_precompiled_mode) {
+    if (unary_ic_data.NumberOfChecks() == 1 &&
+        unary_ic_data.GetExactnessAt(0).IsExact()) {
+      if (unary_ic_data.GetExactnessAt(0).IsTriviallyExact()) {
+        flow_graph()->AddExactnessGuard(instr, unary_ic_data.GetCidAt(0));
+      }
+      is_unchecked_call = true;
+    }
   }
 
   if (I->use_field_guards()) {
     if (field.guarded_cid() != kDynamicCid) {
-      ASSERT(I->use_field_guards());
       InsertBefore(instr,
                    new (Z)
                        GuardFieldClassInstr(new (Z) Value(instr->ArgumentAt(1)),
@@ -965,11 +981,75 @@ bool CallSpecializer::TryInlineInstanceSetter(InstanceCallInstr* instr,
     }
 
     if (field.needs_length_check()) {
-      ASSERT(I->use_field_guards());
       InsertBefore(
           instr,
           new (Z) GuardFieldLengthInstr(new (Z) Value(instr->ArgumentAt(1)),
                                         field, instr->deopt_id()),
+          instr->env(), FlowGraph::kEffect);
+    }
+
+    if (field.static_type_exactness_state().NeedsFieldGuard()) {
+      InsertBefore(instr,
+                   new (Z)
+                       GuardFieldTypeInstr(new (Z) Value(instr->ArgumentAt(1)),
+                                           field, instr->deopt_id()),
+                   instr->env(), FlowGraph::kEffect);
+    }
+  }
+
+  // Build an AssertAssignable if necessary.
+  const AbstractType& dst_type = AbstractType::ZoneHandle(zone(), field.type());
+  if (I->argument_type_checks() && !dst_type.IsTopType()) {
+    // Compute if we need to type check the value. Always type check if
+    // not in strong mode or if at a dynamic invocation.
+    bool needs_check = true;
+    if (FLAG_strong && !instr->interface_target().IsNull() &&
+        (field.kernel_offset() >= 0)) {
+      bool is_covariant = false;
+      bool is_generic_covariant = false;
+      field.GetCovarianceAttributes(&is_covariant, &is_generic_covariant);
+
+      if (is_covariant) {
+        // Always type check covariant fields.
+        needs_check = true;
+      } else if (is_generic_covariant) {
+        // If field is generic covariant then we don't need to check it
+        // if the invocation was marked as unchecked (e.g. receiver of
+        // the invocation is also the receiver of the surrounding method).
+        // Note: we can't use flow_graph()->IsReceiver() for this optimization
+        // because strong mode only gives static guarantees at the AST level
+        // not at the SSA level.
+        needs_check = !(is_unchecked_call ||
+                        (instr->entry_kind() == Code::EntryKind::kUnchecked));
+      } else {
+        // The rest of the stores are checked statically (we are not at
+        // a dynamic invocation).
+        needs_check = false;
+      }
+    }
+
+    if (needs_check) {
+      Definition* instantiator_type_args = flow_graph_->constant_null();
+      Definition* function_type_args = flow_graph_->constant_null();
+      if (!dst_type.IsInstantiated()) {
+        const Class& owner = Class::Handle(Z, field.Owner());
+        if (owner.NumTypeArguments() > 0) {
+          instantiator_type_args = new (Z) LoadFieldInstr(
+              new (Z) Value(instr->ArgumentAt(0)),
+              NativeFieldDesc::GetTypeArgumentsFieldFor(zone(), owner),
+              instr->token_pos());
+          InsertBefore(instr, instantiator_type_args, instr->env(),
+                       FlowGraph::kValue);
+        }
+      }
+
+      InsertBefore(
+          instr,
+          new (Z) AssertAssignableInstr(
+              instr->token_pos(), new (Z) Value(instr->ArgumentAt(1)),
+              new (Z) Value(instantiator_type_args),
+              new (Z) Value(function_type_args), dst_type,
+              String::ZoneHandle(zone(), field.name()), instr->deopt_id()),
           instr->env(), FlowGraph::kEffect);
     }
   }
@@ -1229,7 +1309,8 @@ bool CallSpecializer::TypeCheckAsClassEquality(const AbstractType& type) {
             type_class.ToCString());
       }
       if (FLAG_use_cha_deopt) {
-        thread()->cha()->AddToGuardedClasses(type_class, /*subclass_count=*/0);
+        thread()->compiler_state().cha().AddToGuardedClasses(
+            type_class, /*subclass_count=*/0);
       }
     } else {
       return false;
@@ -1260,7 +1341,7 @@ bool CallSpecializer::TryReplaceInstanceOfWithRangeCheck(
 bool CallSpecializer::TryOptimizeInstanceOfUsingStaticTypes(
     InstanceCallInstr* call,
     const AbstractType& type) {
-  ASSERT(I->strong() && FLAG_use_strong_mode_types);
+  ASSERT(I->can_use_strong_mode_types());
   ASSERT(Token::IsTypeTestOperator(call->token_kind()));
 
   if (type.IsDynamicType() || type.IsObjectType() || !type.IsInstantiated()) {
@@ -1276,7 +1357,7 @@ bool CallSpecializer::TryOptimizeInstanceOfUsingStaticTypes(
         type.IsNullType() ? Token::kEQ_STRICT : Token::kNE_STRICT,
         left_value->CopyWithType(Z),
         new (Z) Value(flow_graph()->constant_null()),
-        /* number_check = */ false, Thread::kNoDeoptId);
+        /* number_check = */ false, DeoptId::kNone);
     if (FLAG_trace_strong_mode_types) {
       THR_Print("[Strong mode] replacing %s with %s (%s < %s)\n",
                 call->ToCString(), replacement->ToCString(),
@@ -1308,7 +1389,7 @@ void CallSpecializer::ReplaceWithInstanceOf(InstanceCallInstr* call) {
     type = AbstractType::Cast(call->ArgumentAt(3)->AsConstant()->value()).raw();
   }
 
-  if (I->strong() && FLAG_use_strong_mode_types &&
+  if (I->can_use_strong_mode_types() &&
       TryOptimizeInstanceOfUsingStaticTypes(call, type)) {
     return;
   }
@@ -1322,7 +1403,7 @@ void CallSpecializer::ReplaceWithInstanceOf(InstanceCallInstr* call) {
 
     StrictCompareInstr* check_cid = new (Z) StrictCompareInstr(
         call->token_pos(), Token::kEQ_STRICT, new (Z) Value(left_cid),
-        new (Z) Value(cid), /* number_check = */ false, Thread::kNoDeoptId);
+        new (Z) Value(cid), /* number_check = */ false, DeoptId::kNone);
     ReplaceCall(call, check_cid);
     return;
   }
@@ -1349,7 +1430,7 @@ void CallSpecializer::ReplaceWithInstanceOf(InstanceCallInstr* call) {
         }
         TestCidsInstr* test_cids = new (Z) TestCidsInstr(
             call->token_pos(), Token::kIS, new (Z) Value(left), *results,
-            can_deopt ? call->deopt_id() : Thread::kNoDeoptId);
+            can_deopt ? call->deopt_id() : DeoptId::kNone);
         // Remove type.
         ReplaceCall(call, test_cids);
         return;
@@ -1560,7 +1641,7 @@ void CallSpecializer::VisitStaticCall(StaticCallInstr* call) {
     }
   }
 
-  if (I->strong() && FLAG_use_strong_mode_types &&
+  if (I->can_use_strong_mode_types() &&
       TryOptimizeStaticCallUsingStaticTypes(call)) {
     return;
   }

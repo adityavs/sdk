@@ -12,18 +12,11 @@ import '../common/tasks.dart' show CompilerTask;
 import '../common_elements.dart' show CommonElements, ElementEnvironment;
 import '../compiler.dart' show Compiler;
 import '../constants/constant_system.dart';
-import '../constants/values.dart';
 import '../deferred_load.dart' show DeferredLoadTask, OutputUnitData;
 import '../dump_info.dart' show DumpInfoTask;
 import '../elements/entities.dart';
 import '../elements/types.dart';
-import '../enqueue.dart'
-    show
-        DirectEnqueuerStrategy,
-        Enqueuer,
-        EnqueueTask,
-        ResolutionEnqueuer,
-        TreeShakingEnqueuerStrategy;
+import '../enqueue.dart' show Enqueuer, EnqueueTask, ResolutionEnqueuer;
 import '../frontend_strategy.dart';
 import '../io/source_information.dart'
     show SourceInformation, SourceInformationStrategy;
@@ -37,8 +30,9 @@ import '../library_loader.dart' show LoadedLibraries;
 import '../native/native.dart' as native;
 import '../ssa/ssa.dart' show SsaFunctionCompiler;
 import '../tracer.dart';
+import '../types/types.dart';
 import '../universe/call_structure.dart' show CallStructure;
-import '../universe/class_hierarchy_builder.dart'
+import '../universe/class_hierarchy.dart'
     show ClassHierarchyBuilder, ClassQueries;
 import '../universe/selector.dart' show Selector;
 import '../universe/use.dart' show StaticUse;
@@ -48,7 +42,7 @@ import '../universe/world_impact.dart'
 import '../util/util.dart';
 import '../world.dart' show JClosedWorld;
 import 'allocator_analysis.dart';
-import 'annotations.dart' as optimizerHints;
+import 'annotations.dart';
 import 'backend_impact.dart';
 import 'backend_usage.dart';
 import 'checked_mode_helpers.dart';
@@ -66,13 +60,12 @@ import 'no_such_method_registry.dart';
 import 'resolution_listener.dart';
 import 'runtime_types.dart';
 
-const VERBOSE_OPTIMIZER_HINTS = false;
-
 abstract class FunctionCompiler {
   void onCodegenStart();
 
   /// Generates JavaScript code for `work.element`.
-  jsAst.Fun compile(CodegenWorkItem work, JClosedWorld closedWorld);
+  jsAst.Fun compile(CodegenWorkItem work, JClosedWorld closedWorld,
+      GlobalTypeInferenceResults globalInferenceResults);
 
   Iterable get tasks;
 }
@@ -94,10 +87,20 @@ class FunctionInlineCache {
   // don't know about the general case yet.
   static const int _canInlineInLoopMayInlineOutside = 3;
   static const int _canInline = 4;
-  static const int _mustInline = 5;
 
   final Map<FunctionEntity, int> _cachedDecisions =
       new Map<FunctionEntity, int>();
+
+  final Set<FunctionEntity> _tryInlineFunctions = new Set<FunctionEntity>();
+
+  FunctionInlineCache(AnnotationsData annotationsData) {
+    annotationsData.nonInlinableFunctions.forEach((FunctionEntity function) {
+      markAsNonInlinable(function);
+    });
+    annotationsData.tryInlineFunctions.forEach((FunctionEntity function) {
+      markAsTryInline(function);
+    });
+  }
 
   /// Checks that [method] is the canonical representative for this method.
   ///
@@ -141,7 +144,6 @@ class FunctionInlineCache {
         case _canInlineInLoopMustNotOutside:
         case _canInlineInLoopMayInlineOutside:
         case _canInline:
-        case _mustInline:
           return true;
       }
     } else {
@@ -158,7 +160,6 @@ class FunctionInlineCache {
           return null;
 
         case _canInline:
-        case _mustInline:
           return true;
       }
     }
@@ -196,7 +197,6 @@ class FunctionInlineCache {
         case _canInlineInLoopMustNotOutside:
         case _canInlineInLoopMayInlineOutside:
         case _canInline:
-        case _mustInline:
           // Do nothing.
           break;
       }
@@ -216,7 +216,6 @@ class FunctionInlineCache {
           break;
 
         case _canInline:
-        case _mustInline:
           // Do nothing.
           break;
       }
@@ -236,7 +235,6 @@ class FunctionInlineCache {
         case _canInlineInLoopMustNotOutside:
         case _canInlineInLoopMayInlineOutside:
         case _canInline:
-        case _mustInline:
           throw failedAt(
               element,
               "Can't mark a function as non-inlinable and inlinable at the "
@@ -254,7 +252,6 @@ class FunctionInlineCache {
     } else {
       switch (oldDecision) {
         case _canInline:
-        case _mustInline:
           throw failedAt(
               element,
               "Can't mark a function as non-inlinable and inlinable at the "
@@ -282,9 +279,14 @@ class FunctionInlineCache {
     }
   }
 
-  void markAsMustInline(FunctionEntity element) {
+  void markAsTryInline(FunctionEntity element) {
     assert(checkFunction(element), failedAt(element));
-    _cachedDecisions[element] = _mustInline;
+    _tryInlineFunctions.add(element);
+  }
+
+  bool markedAsTryInline(FunctionEntity element) {
+    assert(checkFunction(element), failedAt(element));
+    return _tryInlineFunctions.contains(element);
   }
 }
 
@@ -315,8 +317,6 @@ class JavaScriptBackend {
    */
   final Map<MemberEntity, jsAst.Expression> generatedCode =
       <MemberEntity, jsAst.Expression>{};
-
-  FunctionInlineCache inlineCache = new FunctionInlineCache();
 
   /// If [true], the compiler will emit code that logs whenever a method is
   /// called. When TRACE_METHOD is 'console' this will be logged
@@ -574,7 +574,8 @@ class JavaScriptBackend {
         commonElements,
         nativeBasicData,
         _backendUsageBuilder);
-    _allocatorResolutionAnalysis = new KAllocatorAnalysis(elementEnvironment);
+    _allocatorResolutionAnalysis =
+        new KAllocatorAnalysis(compiler.frontendStrategy);
     ClassQueries classQueries = compiler.frontendStrategy.createClassQueries();
     ClassHierarchyBuilder classHierarchyBuilder =
         new ClassHierarchyBuilder(commonElements, classQueries);
@@ -596,9 +597,6 @@ class JavaScriptBackend {
         task,
         compiler.options,
         compiler.reporter,
-        compiler.options.analyzeOnly && compiler.options.analyzeMain
-            ? const DirectEnqueuerStrategy()
-            : const TreeShakingEnqueuerStrategy(),
         new ResolutionEnqueuerListener(
             compiler.options,
             elementEnvironment,
@@ -621,9 +619,7 @@ class JavaScriptBackend {
             _allocatorResolutionAnalysis,
             _nativeResolutionEnqueuer,
             noSuchMethodRegistry,
-            compiler.options.strongMode && useStrongModeWorldStrategy
-                ? const StrongModeWorldStrategy()
-                : const OpenWorldStrategy(),
+            const StrongModeWorldStrategy(),
             classHierarchyBuilder,
             classQueries),
         compiler.frontendStrategy.createResolutionWorkItemBuilder(
@@ -635,7 +631,10 @@ class JavaScriptBackend {
 
   /// Creates an [Enqueuer] for code generation specific to this backend.
   CodegenEnqueuer createCodegenEnqueuer(
-      CompilerTask task, Compiler compiler, JClosedWorld closedWorld) {
+      CompilerTask task,
+      Compiler compiler,
+      JClosedWorld closedWorld,
+      GlobalTypeInferenceResults globalInferenceResults) {
     ElementEnvironment elementEnvironment = closedWorld.elementEnvironment;
     CommonElements commonElements = closedWorld.commonElements;
     BackendImpacts impacts =
@@ -656,12 +655,12 @@ class JavaScriptBackend {
     return new CodegenEnqueuer(
         task,
         compiler.options,
-        const TreeShakingEnqueuerStrategy(),
         compiler.backendStrategy.createCodegenWorldBuilder(
             closedWorld.nativeData,
             closedWorld,
             compiler.abstractValueStrategy.createSelectorStrategy()),
-        compiler.backendStrategy.createCodegenWorkItemBuilder(closedWorld),
+        compiler.backendStrategy
+            .createCodegenWorkItemBuilder(closedWorld, globalInferenceResults),
         new CodegenEnqueuerListener(
             elementEnvironment,
             commonElements,
@@ -672,10 +671,10 @@ class JavaScriptBackend {
             nativeCodegenEnqueuer));
   }
 
-  static bool cacheCodegenImpactForTesting = false;
   Map<MemberEntity, WorldImpact> codegenImpactsForTesting;
 
-  WorldImpact codegen(CodegenWorkItem work, JClosedWorld closedWorld) {
+  WorldImpact codegen(CodegenWorkItem work, JClosedWorld closedWorld,
+      GlobalTypeInferenceResults globalInferenceResults) {
     MemberEntity element = work.element;
     if (compiler.elementHasCompileTimeError(element)) {
       DiagnosticMessage message =
@@ -696,7 +695,8 @@ class JavaScriptBackend {
       return const WorldImpact();
     }
 
-    jsAst.Fun function = functionCompiler.compile(work, closedWorld);
+    jsAst.Fun function =
+        functionCompiler.compile(work, closedWorld, globalInferenceResults);
     if (function != null) {
       if (function.sourceInformation == null) {
         function = function.withSourceInformation(
@@ -704,7 +704,7 @@ class JavaScriptBackend {
       }
       generatedCode[element] = function;
     }
-    if (cacheCodegenImpactForTesting) {
+    if (retainDataForTesting) {
       codegenImpactsForTesting ??= <MemberEntity, WorldImpact>{};
       codegenImpactsForTesting[element] = work.registry.worldImpact;
     }
@@ -730,8 +730,8 @@ class JavaScriptBackend {
   }
 
   /// Generates the output and returns the total size of the generated code.
-  int assembleProgram(JClosedWorld closedWorld) {
-    int programSize = emitter.assembleProgram(namer, closedWorld);
+  int assembleProgram(JClosedWorld closedWorld, InferredData inferredData) {
+    int programSize = emitter.assembleProgram(namer, closedWorld, inferredData);
     closedWorld.noSuchMethodData.emitDiagnostic(reporter);
     return programSize;
   }
@@ -761,7 +761,7 @@ class JavaScriptBackend {
   void setAnnotations(LibraryEntity library) {
     AnnotationProcessor processor =
         compiler.frontendStrategy.annotationProcesser;
-    if (canLibraryUseNative(library)) {
+    if (native.maybeEnableNative(library.canonicalUri)) {
       processor.extractNativeAnnotations(library);
     }
     processor.extractJsInteropAnnotations(library);
@@ -797,8 +797,7 @@ class JavaScriptBackend {
         closedWorld.nativeData,
         closedWorld.elementEnvironment,
         closedWorld.commonElements,
-        closedWorld.rtiNeed,
-        strongMode: compiler.options.strongMode);
+        closedWorld.rtiNeed);
     emitter.createEmitter(namer, closedWorld, codegenWorldBuilder, sorter);
     // TODO(johnniwinther): Share the impact object created in
     // createCodegenEnqueuer.
@@ -819,7 +818,6 @@ class JavaScriptBackend {
         closedWorld.elementEnvironment,
         closedWorld.commonElements,
         impacts,
-        checkedModeHelpers,
         closedWorld.nativeData,
         closedWorld.backendUsage,
         closedWorld.rtiNeed,
@@ -834,123 +832,6 @@ class JavaScriptBackend {
   void onCodegenEnd() {
     sourceInformationStrategy.onComplete();
     tracer.close();
-  }
-
-  /// Returns `true` if the `native` pseudo keyword is supported for [library].
-  bool canLibraryUseNative(LibraryEntity library) =>
-      native.maybeEnableNative(library.canonicalUri);
-
-  /// Process backend specific annotations.
-  // TODO(johnniwinther): Merge this with [AnnotationProcessor] and use
-  // [ElementEnvironment.getMemberMetadata] in [AnnotationProcessor].
-  void processAnnotations(
-      JClosedWorld closedWorld, InferredDataBuilder inferredDataBuilder) {
-    // These methods are overwritten with generated versions.
-    inlineCache.markAsNonInlinable(
-        closedWorld.commonElements.getInterceptorMethod,
-        insideLoop: true);
-    for (MemberEntity entity in closedWorld.processedMembers) {
-      _processMemberAnnotations(closedWorld, inferredDataBuilder, entity);
-    }
-  }
-
-  void _processMemberAnnotations(JClosedWorld closedWorld,
-      InferredDataBuilder inferredDataBuilder, MemberEntity element) {
-    ElementEnvironment elementEnvironment = closedWorld.elementEnvironment;
-    CommonElements commonElements = closedWorld.commonElements;
-    bool hasNoInline = false;
-    bool hasForceInline = false;
-
-    if (element.isFunction || element.isConstructor) {
-      if (optimizerHints.noInline(
-          elementEnvironment, commonElements, element)) {
-        hasNoInline = true;
-        inlineCache.markAsNonInlinable(element);
-      }
-      if (optimizerHints.tryInline(
-          elementEnvironment, commonElements, element)) {
-        hasForceInline = true;
-        if (hasNoInline) {
-          reporter.reportErrorMessage(element, MessageKind.GENERIC,
-              {'text': '@tryInline must not be used with @noInline.'});
-        } else {
-          inlineCache.markAsMustInline(element);
-        }
-      }
-    }
-
-    if (element.isField) return;
-    FunctionEntity method = element;
-
-    LibraryEntity library = method.library;
-    if (library.canonicalUri.scheme != 'dart' &&
-        !canLibraryUseNative(library)) {
-      return;
-    }
-
-    bool hasNoThrows = false;
-    bool hasNoSideEffects = false;
-    for (ConstantValue constantValue
-        in elementEnvironment.getMemberMetadata(method)) {
-      if (!constantValue.isConstructedObject) continue;
-      ObjectConstantValue value = constantValue;
-      ClassEntity cls = value.type.element;
-      if (cls == commonElements.forceInlineClass) {
-        hasForceInline = true;
-        if (VERBOSE_OPTIMIZER_HINTS) {
-          reporter.reportHintMessage(
-              method, MessageKind.GENERIC, {'text': "Must inline"});
-        }
-        inlineCache.markAsMustInline(method);
-      } else if (cls == commonElements.noInlineClass) {
-        hasNoInline = true;
-        if (VERBOSE_OPTIMIZER_HINTS) {
-          reporter.reportHintMessage(
-              method, MessageKind.GENERIC, {'text': "Cannot inline"});
-        }
-        inlineCache.markAsNonInlinable(method);
-      } else if (cls == commonElements.noThrowsClass) {
-        hasNoThrows = true;
-        bool isValid = true;
-        if (method.isTopLevel) {
-          isValid = true;
-        } else if (method.isStatic) {
-          isValid = true;
-        } else if (method is ConstructorEntity && method.isFactoryConstructor) {
-          isValid = true;
-        }
-        if (!isValid) {
-          reporter.internalError(
-              method,
-              "@NoThrows() is currently limited to top-level"
-              " or static functions and factory constructors.");
-        }
-        if (VERBOSE_OPTIMIZER_HINTS) {
-          reporter.reportHintMessage(
-              method, MessageKind.GENERIC, {'text': "Cannot throw"});
-        }
-        inferredDataBuilder.registerCannotThrow(method);
-      } else if (cls == commonElements.noSideEffectsClass) {
-        hasNoSideEffects = true;
-        if (VERBOSE_OPTIMIZER_HINTS) {
-          reporter.reportHintMessage(
-              method, MessageKind.GENERIC, {'text': "Has no side effects"});
-        }
-        inferredDataBuilder.registerSideEffectsFree(method);
-      }
-    }
-    if (hasForceInline && hasNoInline) {
-      reporter.internalError(
-          method, "@ForceInline() must not be used with @NoInline.");
-    }
-    if (hasNoThrows && !hasNoInline) {
-      reporter.internalError(
-          method, "@NoThrows() should always be combined with @NoInline.");
-    }
-    if (hasNoSideEffects && !hasNoInline) {
-      reporter.internalError(
-          method, "@NoSideEffects() should always be combined with @NoInline.");
-    }
   }
 
   /// Enable compilation of code with compile time errors. Returns `true` if

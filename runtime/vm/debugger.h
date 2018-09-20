@@ -287,6 +287,7 @@ class ActivationFrame : public ZoneAllocated {
     ASSERT(!code_.IsNull());
     return code_;
   }
+  bool is_interpreted() const { return is_interpreted_; }
 
   RawString* QualifiedFunctionName();
   RawString* SourceUrl();
@@ -420,6 +421,7 @@ class ActivationFrame : public ZoneAllocated {
 
   Kind kind_;
 
+  bool is_interpreted_;  // Running under kernel bytecode interpreter.
   bool vars_initialized_;
   LocalVarDescriptors& var_descriptors_;
   ZoneGrowableArray<intptr_t> desc_indices_;
@@ -664,7 +666,8 @@ class Debugger {
                                     TokenPosition token_pos,
                                     TokenPosition last_token_pos,
                                     intptr_t requested_line,
-                                    intptr_t requested_column);
+                                    intptr_t requested_column,
+                                    const Function& function);
   bool RemoveBreakpointFromTheList(intptr_t bp_id, BreakpointLocation** list);
   Breakpoint* GetBreakpointByIdInTheList(intptr_t id, BreakpointLocation* list);
   void RemoveUnlinkedCodeBreakpoints();

@@ -82,13 +82,23 @@ intptr_t IOHandle::Read(void* buffer, intptr_t num_bytes) {
   const int err = errno;
   LOG_INFO("IOHandle::Read: fd = %ld. read %ld bytes\n", fd_, read_bytes);
 
-  // Resubscribe to read events. We resubscribe to events even if read() returns
+  // Track the number of bytes available to read.
+  if (read_bytes > 0) {
+    available_bytes_ -=
+        (available_bytes_ >= read_bytes) ? read_bytes : available_bytes_;
+  }
+
+  // If we have read all available bytes, or if there was an error, then
+  // re-enable read events. We re-enable read events even if read() returns
   // an error. The error might be, e.g. EWOULDBLOCK, in which case
-  // re-subscription is necessary. Logic in the caller decides which errors are
-  // real, and which are ignore-and-continue.
-  read_events_enabled_ = true;
-  if (!AsyncWaitLocked(ZX_HANDLE_INVALID, POLLIN, wait_key_)) {
-    LOG_ERR("IOHandle::AsyncWait failed for fd = %ld\n", fd_);
+  // resubscription is necessary. Logic in the caller decides which errors
+  // are real, and which are ignore-and-continue.
+  if ((available_bytes_ == 0) || (read_bytes < 0)) {
+    // Resubscribe to read events.
+    read_events_enabled_ = true;
+    if (!AsyncWaitLocked(ZX_HANDLE_INVALID, POLLIN, wait_key_)) {
+      LOG_ERR("IOHandle::AsyncWait failed for fd = %ld\n", fd_);
+    }
   }
 
   errno = err;
@@ -126,6 +136,21 @@ intptr_t IOHandle::Accept(struct sockaddr* addr, socklen_t* addrlen) {
 
   errno = err;
   return socket;
+}
+
+intptr_t IOHandle::AvailableBytes() {
+  MutexLocker ml(mutex_);
+  ASSERT(fd_ >= 0);
+  intptr_t available = FDUtils::AvailableBytes(fd_);
+  LOG_INFO("IOHandle::AvailableBytes(): fd = %ld, bytes = %ld\n", fd_,
+           available);
+  if (available < 0) {
+    // If there is an error, we set available to 1 to trigger a read event that
+    // then propagates the error.
+    available = 1;
+  }
+  available_bytes_ = available;
+  return available;
 }
 
 void IOHandle::Close() {
@@ -266,7 +291,7 @@ void EventHandlerImplementation::RemoveFromPort(zx_handle_t port_handle,
 }
 
 EventHandlerImplementation::EventHandlerImplementation()
-    : socket_map_(&HashMap::SamePointerValue, 16) {
+    : socket_map_(&SimpleHashMap::SamePointerValue, 16) {
   shutdown_ = false;
   // Create the port.
   port_handle_ = ZX_HANDLE_INVALID;
@@ -311,7 +336,7 @@ DescriptorInfo* EventHandlerImplementation::GetDescriptorInfo(
     bool is_listening) {
   IOHandle* handle = reinterpret_cast<IOHandle*>(fd);
   ASSERT(handle->fd() >= 0);
-  HashMap::Entry* entry =
+  SimpleHashMap::Entry* entry =
       socket_map_.Lookup(GetHashmapKeyFromFd(handle->fd()),
                          GetHashmapHashFromFd(handle->fd()), true);
   ASSERT(entry != NULL);
@@ -385,7 +410,9 @@ void EventHandlerImplementation::HandleInterrupt(InterruptMessage* msg) {
     // message.
     const intptr_t old_mask = di->Mask();
     Dart_Port port = msg->dart_port;
-    di->RemovePort(port);
+    if (port != ILLEGAL_PORT) {
+      di->RemovePort(port);
+    }
     const intptr_t new_mask = di->Mask();
     UpdatePort(old_mask, di);
 

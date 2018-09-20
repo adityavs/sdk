@@ -4,7 +4,7 @@
 
 library fasta.parser.listener;
 
-import '../../scanner/token.dart' show Token, TokenType;
+import '../../scanner/token.dart' show Token;
 
 import '../fasta_codes.dart' show Message;
 
@@ -17,8 +17,6 @@ import 'formal_parameter_kind.dart' show FormalParameterKind;
 import 'identifier_context.dart' show IdentifierContext;
 
 import 'member_kind.dart' show MemberKind;
-
-import 'parser_error.dart' show ParserError;
 
 /// A parser event listener that does nothing except throw exceptions
 /// on parser errors.
@@ -78,19 +76,19 @@ class Listener implements UnescapeErrorListener {
     logEvent("CaseExpression");
   }
 
-  void beginClassBody(Token token) {}
+  void beginClassOrMixinBody(Token token) {}
 
-  /// Handle the end of the body of a class declaration.  The only substructures
-  /// are the class members.
-  void endClassBody(int memberCount, Token beginToken, Token endToken) {
-    logEvent("ClassBody");
+  /// Handle the end of the body of a class or mixin declaration.
+  /// The only substructures are the class or mixin members.
+  void endClassOrMixinBody(int memberCount, Token beginToken, Token endToken) {
+    logEvent("ClassOrMixinBody");
   }
 
   /// Called before parsing a class or named mixin application.
   void beginClassOrNamedMixinApplication(Token token) {}
 
   /// Handle the beginning of a class declaration.
-  /// [beginToken] may be the same as [name], or may point to modifiers
+  /// [begin] may be the same as [name], or may point to modifiers
   /// (or extraneous modifiers in the case of recovery) preceding [name].
   void beginClassDeclaration(Token begin, Token abstractToken, Token name) {}
 
@@ -100,9 +98,11 @@ class Listener implements UnescapeErrorListener {
     logEvent("ClassExtends");
   }
 
-  /// Handle an implements clause in a class declaration. Substructures:
+  /// Handle an implements clause in a class or mixin declaration.
+  /// Substructures:
   /// - implemented types
-  void handleClassImplements(Token implementsKeyword, int interfacesCount) {
+  void handleClassOrMixinImplements(
+      Token implementsKeyword, int interfacesCount) {
     logEvent("ClassImplements");
   }
 
@@ -111,7 +111,8 @@ class Listener implements UnescapeErrorListener {
   /// - modifiers
   /// - class name
   /// - type variables
-  /// - supertype (may be a mixin application)
+  /// - supertype
+  /// - with clause
   /// - implemented types
   /// - native clause
   void handleClassHeader(Token begin, Token classKeyword, Token nativeToken) {
@@ -123,7 +124,8 @@ class Listener implements UnescapeErrorListener {
   /// to recover information about the previous class header.
   /// The substructures are a subset of
   /// and in the same order as [handleClassHeader]:
-  /// - supertype (may be a mixin application)
+  /// - supertype
+  /// - with clause
   /// - implemented types
   void handleRecoverClassHeader() {
     logEvent("RecoverClassHeader");
@@ -134,6 +136,43 @@ class Listener implements UnescapeErrorListener {
   /// - class body
   void endClassDeclaration(Token beginToken, Token endToken) {
     logEvent("ClassDeclaration");
+  }
+
+  /// Handle the beginning of a mixin declaration.
+  void beginMixinDeclaration(Token mixinKeyword, Token name) {}
+
+  /// Handle an on clause in a mixin declaration. Substructures:
+  /// - implemented types
+  void handleMixinOn(Token onKeyword, int typeCount) {
+    logEvent("MixinOn");
+  }
+
+  /// Handle the header of a class declaration.  Substructures:
+  /// - metadata
+  /// - mixin name
+  /// - type variables
+  /// - on types
+  /// - implemented types
+  void handleMixinHeader(Token mixinKeyword) {
+    logEvent("MixinHeader");
+  }
+
+  /// Handle recovery associated with a mixin header.
+  /// This may be called multiple times after [handleMixinHeader]
+  /// to recover information about the previous mixin header.
+  /// The substructures are a subset of
+  /// and in the same order as [handleMixinHeader]
+  /// - on types
+  /// - implemented types
+  void handleRecoverMixinHeader() {
+    logEvent("RecoverMixinHeader");
+  }
+
+  /// Handle the end of a mixin declaration.  Substructures:
+  /// - mixin header
+  /// - class or mixin body
+  void endMixinDeclaration(Token mixinKeyword, Token endToken) {
+    logEvent("MixinDeclaration");
   }
 
   void beginCombinators(Token token) {}
@@ -396,14 +435,16 @@ class Listener implements UnescapeErrorListener {
     logEvent("FunctionTypeAlias");
   }
 
-  void beginMixinApplication(Token token) {}
-
-  /// Handle the end of a mixin application construct (e.g. "A with B, C").
+  /// Handle the end of a with clause (e.g. "with B, C").
   /// Substructures:
-  /// - supertype
   /// - mixin types (TypeList)
-  void endMixinApplication(Token withKeyword) {
-    logEvent("MixinApplication");
+  void handleClassWithClause(Token withKeyword) {
+    logEvent("ClassWithClause");
+  }
+
+  /// Handle the absence of a with clause.
+  void handleClassNoWithClause() {
+    logEvent("ClassNoWithClause");
   }
 
   /// Handle the beginning of a named mixin application.
@@ -412,12 +453,21 @@ class Listener implements UnescapeErrorListener {
   void beginNamedMixinApplication(
       Token begin, Token abstractToken, Token name) {}
 
+  /// Handle a named mixin application with clause (e.g. "A with B, C").
+  /// Substructures:
+  /// - supertype
+  /// - mixin types (TypeList)
+  void handleNamedMixinApplicationWithClause(Token withKeyword) {
+    logEvent("NamedMixinApplicationWithClause");
+  }
+
   /// Handle the end of a named mixin declaration.  Substructures:
   /// - metadata
   /// - modifiers
   /// - class name
   /// - type variables
-  /// - mixin application
+  /// - supertype
+  /// - with clause
   /// - implemented types (TypeList)
   ///
   /// TODO(paulberry,ahe): it seems inconsistent that for a named mixin
@@ -645,7 +695,7 @@ class Listener implements UnescapeErrorListener {
   /// Handle the beginning of a method declaration.  Substructures:
   /// - metadata
   void beginMethod(Token externalToken, Token staticToken, Token covariantToken,
-      Token varFinalOrConst, Token name) {}
+      Token varFinalOrConst, Token getOrSet, Token name) {}
 
   /// Handle the end of a method declaration.  Substructures:
   /// - metadata
@@ -867,7 +917,7 @@ class Listener implements UnescapeErrorListener {
     logEvent("TryStatement");
   }
 
-  void handleType(Token beginToken, Token endToken) {
+  void handleType(Token beginToken) {
     logEvent("Type");
   }
 
@@ -883,7 +933,7 @@ class Listener implements UnescapeErrorListener {
   /// - Type variables
   /// - Return type
   /// - Formal parameters
-  void endFunctionType(Token functionToken, Token endToken) {
+  void endFunctionType(Token functionToken) {
     logEvent("FunctionType");
   }
 
@@ -998,7 +1048,7 @@ class Listener implements UnescapeErrorListener {
   /// - type variables
   /// - return type
   /// - formal parameters
-  void endFunctionTypedFormalParameter() {
+  void endFunctionTypedFormalParameter(Token nameToken) {
     logEvent("FunctionTypedFormalParameter");
   }
 
@@ -1210,22 +1260,6 @@ class Listener implements UnescapeErrorListener {
     logEvent("YieldStatement");
   }
 
-  /// An unrecoverable error is an error that the parser can't recover from
-  /// itself, and recovery is left to the listener. If the listener can
-  /// recover, it should return a non-null continuation token whose `next`
-  /// pointer is the token the parser should continue from. Error recovery
-  /// is tightly coupled to the parser implementation, so to recover from an
-  /// error, one must carefully examine the code in the parser that generates
-  /// the error.
-  ///
-  /// If the listener can't recover, it can throw an exception or return
-  /// `null`. In the latter case, the parser simply skips to EOF which will
-  /// often result in additional parser errors as the parser returns from its
-  /// recursive state.
-  Token handleUnrecoverableError(Token token, Message message) {
-    throw new ParserError.fromTokens(token, token, message);
-  }
-
   /// The parser noticed a syntax error, but was able to recover from it. The
   /// error should be reported using the [message], and the code between the
   /// beginning of the [startToken] and the end of the [endToken] should be
@@ -1256,11 +1290,29 @@ class Listener implements UnescapeErrorListener {
   /// parsed should be discarded, and a new type should be parsed instead.
   void discardTypeReplacedWithCommentTypeAssign() {}
 
-  /// Creates a new synthetic token whose `next` pointer points to [next].
+  /// A single comment reference has been found
+  /// where [referenceSource] is the text between the `[` and `]`
+  /// and [referenceOffset] is the character offset in the token stream.
   ///
-  /// If [next] is `null`, `null` is returned.
-  Token newSyntheticToken(Token next) {
-    if (next == null) return null;
-    return new Token(TokenType.RECOVERY, next.charOffset)..next = next;
+  /// This event is generated by the parser when the parser's
+  /// `parseCommentReferences` method is called. For further processing,
+  /// a listener may scan the [referenceSource] and then pass the resulting
+  /// token stream to the parser's `parseOneCommentReference` method.
+  void handleCommentReferenceText(String referenceSource, int referenceOffset) {
+    logEvent("CommentReferenceText");
   }
+
+  /// A single comment reference has been parsed.
+  /// * [newKeyword] may be null.
+  /// * [prefix] and [period] are either both tokens or both `null`.
+  /// * [token] can be an identifier or an operator.
+  ///
+  /// This event is generated by the parser when the parser's
+  /// `parseOneCommentReference` method is called.
+  void handleCommentReference(
+      Token newKeyword, Token prefix, Token period, Token token) {}
+
+  /// This event is generated by the parser when the parser's
+  /// `parseOneCommentReference` method is called.
+  void handleNoCommentReference() {}
 }

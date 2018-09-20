@@ -4,9 +4,7 @@
 
 library dart2js.frontend_strategy;
 
-import '../compiler_new.dart' as api;
 import 'common/backend_api.dart';
-import 'common/tasks.dart';
 import 'common.dart';
 import 'common_elements.dart';
 import 'compiler.dart' show Compiler;
@@ -23,16 +21,15 @@ import 'js_backend/runtime_types.dart';
 import 'library_loader.dart';
 import 'native/enqueue.dart' show NativeResolutionEnqueuer;
 import 'native/resolver.dart';
-import 'universe/class_hierarchy_builder.dart';
+import 'universe/class_hierarchy.dart';
 import 'universe/world_builder.dart';
 import 'universe/world_impact.dart';
 
 /// Strategy pattern that defines the connection between the input format and
 /// the resolved element model.
 abstract class FrontendStrategy {
-  /// Creates library loader task for this strategy.
-  LibraryLoaderTask createLibraryLoader(api.CompilerInput compilerInput,
-      DiagnosticReporter reporter, Measurer measurer);
+  /// Registers a set of loaded libraries with this strategy.
+  void registerLoadedLibraries(LoadedLibraries loadedLibraries);
 
   /// Returns the [ElementEnvironment] for the element model used in this
   /// strategy.
@@ -88,8 +85,7 @@ abstract class FrontendStrategy {
 
   /// Computes the main function from [mainLibrary] adding additional world
   /// impact to [impactBuilder].
-  FunctionEntity computeMain(
-      LibraryEntity mainLibrary, WorldImpactBuilder impactBuilder);
+  FunctionEntity computeMain(WorldImpactBuilder impactBuilder);
 
   /// Creates the [RuntimeTypesNeedBuilder] for this strategy.
   RuntimeTypesNeedBuilder createRuntimeTypesNeedBuilder();
@@ -131,8 +127,6 @@ abstract class FrontendStrategyBase implements FrontendStrategy {
 /// Class that deletes the contents of an [WorldImpact] cache.
 // TODO(redemption): this can be deleted when we sunset the old front end.
 abstract class ImpactCacheDeleter {
-  static bool retainCachesForTesting = false;
-
   /// Removes the [WorldImpact] for [element] from the resolution cache. Later
   /// calls to [getWorldImpact] or [computeWorldImpact] returns an empty impact.
   void uncacheWorldImpact(Entity element);

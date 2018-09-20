@@ -249,8 +249,9 @@ class FieldMember extends VariableMember implements FieldElement {
   @override
   bool get isVirtual => baseElement.isVirtual;
 
+  @deprecated
   @override
-  DartType get propagatedType => substituteFor(baseElement.propagatedType);
+  DartType get propagatedType => null;
 
   @override
   PropertyAccessorElement get setter =>
@@ -416,6 +417,12 @@ abstract class Member implements Element {
 
   @override
   bool get hasRequired => _baseElement.hasRequired;
+
+  @override
+  bool get hasSealed => _baseElement.hasSealed;
+
+  @override
+  bool get hasVisibleForTemplate => _baseElement.hasVisibleForTemplate;
 
   @override
   bool get hasVisibleForTesting => _baseElement.hasVisibleForTesting;
@@ -702,7 +709,7 @@ class ParameterMember extends VariableMember
     if (type is FunctionType) {
       return type.parameters;
     }
-    return ParameterElement.EMPTY_LIST;
+    return const <ParameterElement>[];
   }
 
   @override

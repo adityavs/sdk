@@ -13,7 +13,6 @@ import 'package:analyzer/file_system/memory_file_system.dart';
 import 'package:analyzer/src/dart/element/element.dart';
 import 'package:analyzer/src/dart/element/type.dart';
 import 'package:analyzer/src/dart/resolver/inheritance_manager.dart';
-import 'package:analyzer/src/error/codes.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/resolver.dart';
 import 'package:analyzer/src/generated/source_io.dart';
@@ -55,9 +54,6 @@ class InheritanceManagerTest {
    * The number of members that Object implements (as determined by [TestTypeProvider]).
    */
   int _numOfMembersInObject = 0;
-
-  bool get previewDart2 =>
-      _definingLibrary.context.analysisOptions.previewDart2;
 
   void setUp() {
     _typeProvider = new TestTypeProvider();
@@ -321,152 +317,6 @@ class InheritanceManagerTest {
     _assertNoErrors(classA);
   }
 
-  void
-      test_getMapOfMembersInheritedFromInterfaces_inconsistentMethodInheritance_getter_method() {
-    // class I1 { int m(); }
-    // class I2 { int get m; }
-    // class A implements I2, I1 {}
-    ClassElementImpl classI1 = ElementFactory.classElement2("I1");
-    String methodName = "m";
-    MethodElement methodM =
-        ElementFactory.methodElement(methodName, _typeProvider.intType);
-    classI1.methods = <MethodElement>[methodM];
-    ClassElementImpl classI2 = ElementFactory.classElement2("I2");
-    PropertyAccessorElement getter =
-        ElementFactory.getterElement(methodName, false, _typeProvider.intType);
-    classI2.accessors = <PropertyAccessorElement>[getter];
-    ClassElementImpl classA = ElementFactory.classElement2("A");
-    classA.interfaces = <InterfaceType>[classI2.type, classI1.type];
-    Map<String, ExecutableElement> mapA =
-        _inheritanceManager.getMembersInheritedFromInterfaces(classA);
-    expect(mapA.length, _numOfMembersInObject);
-    expect(mapA[methodName], isNull);
-    _assertErrors(classA,
-        [StaticWarningCode.INCONSISTENT_METHOD_INHERITANCE_GETTER_AND_METHOD]);
-  }
-
-  void
-      test_getMapOfMembersInheritedFromInterfaces_inconsistentMethodInheritance_int_str() {
-    // class I1 { int m(); }
-    // class I2 { String m(); }
-    // class A implements I1, I2 {}
-    ClassElementImpl classI1 = ElementFactory.classElement2("I1");
-    String methodName = "m";
-    MethodElement methodM1 =
-        ElementFactory.methodElement(methodName, null, [_typeProvider.intType]);
-    classI1.methods = <MethodElement>[methodM1];
-    ClassElementImpl classI2 = ElementFactory.classElement2("I2");
-    MethodElement methodM2 = ElementFactory
-        .methodElement(methodName, null, [_typeProvider.stringType]);
-    classI2.methods = <MethodElement>[methodM2];
-    ClassElementImpl classA = ElementFactory.classElement2("A");
-    classA.interfaces = <InterfaceType>[classI1.type, classI2.type];
-    Map<String, ExecutableElement> mapA =
-        _inheritanceManager.getMembersInheritedFromInterfaces(classA);
-    expect(mapA.length, _numOfMembersInObject);
-    expect(mapA[methodName], isNull);
-    _assertErrors(
-        classA, [StaticTypeWarningCode.INCONSISTENT_METHOD_INHERITANCE]);
-  }
-
-  void
-      test_getMapOfMembersInheritedFromInterfaces_inconsistentMethodInheritance_method_getter() {
-    // class I1 { int m(); }
-    // class I2 { int get m; }
-    // class A implements I1, I2 {}
-    ClassElementImpl classI1 = ElementFactory.classElement2("I1");
-    String methodName = "m";
-    MethodElement methodM =
-        ElementFactory.methodElement(methodName, _typeProvider.intType);
-    classI1.methods = <MethodElement>[methodM];
-    ClassElementImpl classI2 = ElementFactory.classElement2("I2");
-    PropertyAccessorElement getter =
-        ElementFactory.getterElement(methodName, false, _typeProvider.intType);
-    classI2.accessors = <PropertyAccessorElement>[getter];
-    ClassElementImpl classA = ElementFactory.classElement2("A");
-    classA.interfaces = <InterfaceType>[classI1.type, classI2.type];
-    Map<String, ExecutableElement> mapA =
-        _inheritanceManager.getMembersInheritedFromInterfaces(classA);
-    expect(mapA.length, _numOfMembersInObject);
-    expect(mapA[methodName], isNull);
-    _assertErrors(classA,
-        [StaticWarningCode.INCONSISTENT_METHOD_INHERITANCE_GETTER_AND_METHOD]);
-  }
-
-  void
-      test_getMapOfMembersInheritedFromInterfaces_inconsistentMethodInheritance_numOfRequiredParams() {
-    // class I1 { dynamic m(int, [int]); }
-    // class I2 { dynamic m(int, int, int); }
-    // class A implements I1, I2 {}
-    ClassElementImpl classI1 = ElementFactory.classElement2("I1");
-    String methodName = "m";
-    MethodElementImpl methodM1 =
-        ElementFactory.methodElement(methodName, _typeProvider.dynamicType);
-    ParameterElementImpl parameter1 =
-        new ParameterElementImpl.forNode(AstTestFactory.identifier3("a1"));
-    parameter1.type = _typeProvider.intType;
-    parameter1.parameterKind = ParameterKind.REQUIRED;
-    ParameterElementImpl parameter2 =
-        new ParameterElementImpl.forNode(AstTestFactory.identifier3("a2"));
-    parameter2.type = _typeProvider.intType;
-    parameter2.parameterKind = ParameterKind.POSITIONAL;
-    methodM1.parameters = <ParameterElement>[parameter1, parameter2];
-    classI1.methods = <MethodElement>[methodM1];
-    ClassElementImpl classI2 = ElementFactory.classElement2("I2");
-    MethodElementImpl methodM2 =
-        ElementFactory.methodElement(methodName, _typeProvider.dynamicType);
-    ParameterElementImpl parameter3 =
-        new ParameterElementImpl.forNode(AstTestFactory.identifier3("a3"));
-    parameter3.type = _typeProvider.intType;
-    parameter3.parameterKind = ParameterKind.REQUIRED;
-    ParameterElementImpl parameter4 =
-        new ParameterElementImpl.forNode(AstTestFactory.identifier3("a4"));
-    parameter4.type = _typeProvider.intType;
-    parameter4.parameterKind = ParameterKind.REQUIRED;
-    ParameterElementImpl parameter5 =
-        new ParameterElementImpl.forNode(AstTestFactory.identifier3("a5"));
-    parameter5.type = _typeProvider.intType;
-    parameter5.parameterKind = ParameterKind.REQUIRED;
-    methodM2.parameters = <ParameterElement>[
-      parameter3,
-      parameter4,
-      parameter5
-    ];
-    classI2.methods = <MethodElement>[methodM2];
-    ClassElementImpl classA = ElementFactory.classElement2("A");
-    classA.interfaces = <InterfaceType>[classI1.type, classI2.type];
-    Map<String, ExecutableElement> mapA =
-        _inheritanceManager.getMembersInheritedFromInterfaces(classA);
-    expect(mapA.length, _numOfMembersInObject);
-    expect(mapA[methodName], isNull);
-    _assertErrors(
-        classA, [StaticTypeWarningCode.INCONSISTENT_METHOD_INHERITANCE]);
-  }
-
-  void
-      test_getMapOfMembersInheritedFromInterfaces_inconsistentMethodInheritance_str_int() {
-    // class I1 { int m(); }
-    // class I2 { String m(); }
-    // class A implements I2, I1 {}
-    ClassElementImpl classI1 = ElementFactory.classElement2("I1");
-    String methodName = "m";
-    MethodElement methodM1 = ElementFactory
-        .methodElement(methodName, null, [_typeProvider.stringType]);
-    classI1.methods = <MethodElement>[methodM1];
-    ClassElementImpl classI2 = ElementFactory.classElement2("I2");
-    MethodElement methodM2 =
-        ElementFactory.methodElement(methodName, null, [_typeProvider.intType]);
-    classI2.methods = <MethodElement>[methodM2];
-    ClassElementImpl classA = ElementFactory.classElement2("A");
-    classA.interfaces = <InterfaceType>[classI2.type, classI1.type];
-    Map<String, ExecutableElement> mapA =
-        _inheritanceManager.getMembersInheritedFromInterfaces(classA);
-    expect(mapA.length, _numOfMembersInObject);
-    expect(mapA[methodName], isNull);
-    _assertErrors(
-        classA, [StaticTypeWarningCode.INCONSISTENT_METHOD_INHERITANCE]);
-  }
-
   void test_getMapOfMembersInheritedFromInterfaces_method_extends() {
     // class A { int g(); }
     // class B extends A {}
@@ -573,13 +423,8 @@ class InheritanceManagerTest {
         _inheritanceManager.getMembersInheritedFromInterfaces(classA);
     expect(mapA.length, _numOfMembersInObject + 1);
     PropertyAccessorElement syntheticAccessor;
-    if (previewDart2) {
-      syntheticAccessor = ElementFactory.getterElement(
-          accessorName, false, _typeProvider.intType);
-    } else {
-      syntheticAccessor = ElementFactory.getterElement(
-          accessorName, false, _typeProvider.dynamicType);
-    }
+    syntheticAccessor = ElementFactory.getterElement(
+        accessorName, false, _typeProvider.intType);
     expect(mapA[accessorName].type, syntheticAccessor.type);
     _assertNoErrors(classA);
   }
@@ -614,13 +459,8 @@ class InheritanceManagerTest {
         _inheritanceManager.getMembersInheritedFromInterfaces(classA);
     expect(mapA.length, _numOfMembersInObject + 1);
     MethodElement syntheticMethod;
-    if (previewDart2) {
-      syntheticMethod = ElementFactory.methodElement(
-          methodName, _typeProvider.dynamicType, [_typeProvider.numType]);
-    } else {
-      syntheticMethod = ElementFactory.methodElement(
-          methodName, _typeProvider.dynamicType, [_typeProvider.dynamicType]);
-    }
+    syntheticMethod = ElementFactory.methodElement(
+        methodName, _typeProvider.dynamicType, [_typeProvider.numType]);
     expect(mapA[methodName].type, syntheticMethod.type);
     _assertNoErrors(classA);
   }
@@ -645,15 +485,9 @@ class InheritanceManagerTest {
         _inheritanceManager.getMembersInheritedFromInterfaces(classA);
     expect(mapA.length, _numOfMembersInObject + 1);
     PropertyAccessorElementImpl syntheticAccessor;
-    if (previewDart2) {
-      syntheticAccessor = ElementFactory.setterElement(
-          accessorName, false, _typeProvider.numType);
-      syntheticAccessor.returnType = VoidTypeImpl.instance;
-    } else {
-      syntheticAccessor = ElementFactory.setterElement(
-          accessorName, false, _typeProvider.dynamicType);
-      syntheticAccessor.returnType = _typeProvider.dynamicType;
-    }
+    syntheticAccessor = ElementFactory.setterElement(
+        accessorName, false, _typeProvider.numType);
+    syntheticAccessor.returnType = VoidTypeImpl.instance;
     expect(mapA["$accessorName="].type, syntheticAccessor.type);
     _assertNoErrors(classA);
   }
@@ -693,13 +527,8 @@ class InheritanceManagerTest {
         _inheritanceManager.getMembersInheritedFromInterfaces(classD);
     expect(mapD.length, _numOfMembersInObject + 1);
     PropertyAccessorElement syntheticAccessor;
-    if (previewDart2) {
-      syntheticAccessor =
-          ElementFactory.getterElement(accessorName, false, classC.type);
-    } else {
-      syntheticAccessor = ElementFactory.getterElement(
-          accessorName, false, _typeProvider.dynamicType);
-    }
+    syntheticAccessor =
+        ElementFactory.getterElement(accessorName, false, classC.type);
     expect(mapD[accessorName].type, syntheticAccessor.type);
     _assertNoErrors(classD);
   }
@@ -754,13 +583,8 @@ class InheritanceManagerTest {
         _inheritanceManager.getMembersInheritedFromInterfaces(classD);
     expect(mapD.length, _numOfMembersInObject + 1);
     MethodElement syntheticMethod;
-    if (previewDart2) {
-      syntheticMethod = ElementFactory
-          .methodElement(methodName, _typeProvider.dynamicType, [classA.type]);
-    } else {
-      syntheticMethod = ElementFactory.methodElement(
-          methodName, _typeProvider.dynamicType, [_typeProvider.dynamicType]);
-    }
+    syntheticMethod = ElementFactory.methodElement(
+        methodName, _typeProvider.dynamicType, [classA.type]);
     expect(mapD[methodName].type, syntheticMethod.type);
     _assertNoErrors(classD);
   }
@@ -800,15 +624,9 @@ class InheritanceManagerTest {
         _inheritanceManager.getMembersInheritedFromInterfaces(classD);
     expect(mapD.length, _numOfMembersInObject + 1);
     PropertyAccessorElementImpl syntheticAccessor;
-    if (previewDart2) {
-      syntheticAccessor =
-          ElementFactory.setterElement(accessorName, false, classA.type);
-      syntheticAccessor.returnType = VoidTypeImpl.instance;
-    } else {
-      syntheticAccessor = ElementFactory.setterElement(
-          accessorName, false, _typeProvider.dynamicType);
-      syntheticAccessor.returnType = _typeProvider.dynamicType;
-    }
+    syntheticAccessor =
+        ElementFactory.setterElement(accessorName, false, classA.type);
+    syntheticAccessor.returnType = VoidTypeImpl.instance;
     expect(mapD["$accessorName="].type, syntheticAccessor.type);
     _assertNoErrors(classD);
   }

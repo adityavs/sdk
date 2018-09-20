@@ -26,12 +26,14 @@ isolate_import_test/01: Skip # Flutter Issue 9114
 issue_21398_parent_isolate2_test/01: Skip # Flutter Issue 9114
 simple_message_test/01: Skip # Flutter Issue 9114
 
+[ $runtime != none ]
+kill2_test: RuntimeError # Uppercase constants removed
+kill_self_synchronously_test: RuntimeError # Uppercase constants removed
+kill_test: RuntimeError # Uppercase constants removed
+
 [ $csp ]
 browser/package_resolve_browser_hook_test: SkipByDesign # Test written in a way that violates CSP.
 deferred_in_isolate2_test: Skip # Issue 16898. Deferred loading does not work from an isolate in CSP-mode
-
-[ $fasta ]
-compile_time_error_test/01: MissingCompileTimeError
 
 [ $jscl ]
 spawn_uri_multi_test/none: RuntimeError # Issue 13544
@@ -41,9 +43,6 @@ spawn_uri_multi_test/none: RuntimeError # Issue 13544
 # here.
 [ $strong ]
 *: SkipByDesign
-
-[ $compiler == dart2analyzer && $strong ]
-*: Skip # Issue 28649
 
 [ $compiler == none && $runtime == vm && $system == fuchsia ]
 *: Skip # Not yet triaged.
@@ -60,7 +59,7 @@ ping_test: Skip # Resolve test issues
 [ $compiler == app_jit || $mode == product || $runtime != vm ]
 checked_test: Skip # Unsupported.
 
-[ $compiler == dartk || $compiler == dartkp ]
+[ $compiler == dartk || $compiler == dartkb || $compiler == dartkp ]
 *: Skip # This directory has only Dart1 tests (Dart2 tests are in lib_2/isolate).
 
 [ $compiler != none || $runtime != vm ]

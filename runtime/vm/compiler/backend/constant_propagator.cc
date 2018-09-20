@@ -237,11 +237,15 @@ void ConstantPropagator::VisitCheckStackOverflow(
 
 void ConstantPropagator::VisitCheckClass(CheckClassInstr* instr) {}
 
+void ConstantPropagator::VisitCheckCondition(CheckConditionInstr* instr) {}
+
 void ConstantPropagator::VisitCheckClassId(CheckClassIdInstr* instr) {}
 
 void ConstantPropagator::VisitGuardFieldClass(GuardFieldClassInstr* instr) {}
 
 void ConstantPropagator::VisitGuardFieldLength(GuardFieldLengthInstr* instr) {}
+
+void ConstantPropagator::VisitGuardFieldType(GuardFieldTypeInstr* instr) {}
 
 void ConstantPropagator::VisitCheckSmi(CheckSmiInstr* instr) {}
 
@@ -706,8 +710,10 @@ void ConstantPropagator::VisitBooleanNegate(BooleanNegateInstr* instr) {
 void ConstantPropagator::VisitInstanceOf(InstanceOfInstr* instr) {
   Definition* def = instr->value()->definition();
   const Object& value = def->constant_value();
-  if (IsNonConstant(value)) {
-    const AbstractType& checked_type = instr->type();
+  const AbstractType& checked_type = instr->type();
+  if (checked_type.IsTopType()) {
+    SetValue(instr, Bool::True());
+  } else if (IsNonConstant(value)) {
     intptr_t value_cid = instr->value()->definition()->Type()->ToCid();
     Representation rep = def->representation();
     if ((checked_type.IsFloat32x4Type() && (rep == kUnboxedFloat32x4)) ||
@@ -728,7 +734,6 @@ void ConstantPropagator::VisitInstanceOf(InstanceOfInstr* instr) {
   } else if (IsConstant(value)) {
     if (value.IsInstance()) {
       const Instance& instance = Instance::Cast(value);
-      const AbstractType& checked_type = instr->type();
       if (instr->instantiator_type_arguments()->BindsToConstantNull() &&
           instr->function_type_arguments()->BindsToConstantNull()) {
         Error& bound_error = Error::Handle();
@@ -1297,7 +1302,7 @@ void ConstantPropagator::EliminateRedundantBranches() {
         JoinEntryInstr* join = if_true->AsJoinEntry();
         if (join->phis() == NULL) {
           GotoInstr* jump =
-              new (Z) GotoInstr(if_true->AsJoinEntry(), Thread::kNoDeoptId);
+              new (Z) GotoInstr(if_true->AsJoinEntry(), DeoptId::kNone);
           jump->InheritDeoptTarget(Z, branch);
 
           Instruction* previous = branch->previous();
@@ -1439,8 +1444,8 @@ void ConstantPropagator::Transform() {
         ASSERT(reachable_->Contains(if_false->preorder_number()));
         ASSERT(if_false->parallel_move() == NULL);
         ASSERT(if_false->loop_info() == NULL);
-        join = new (Z) JoinEntryInstr(
-            if_false->block_id(), if_false->try_index(), Thread::kNoDeoptId);
+        join = new (Z) JoinEntryInstr(if_false->block_id(),
+                                      if_false->try_index(), DeoptId::kNone);
         join->InheritDeoptTarget(Z, if_false);
         if_false->UnuseAllInputs();
         next = if_false->next();
@@ -1448,7 +1453,7 @@ void ConstantPropagator::Transform() {
         ASSERT(if_true->parallel_move() == NULL);
         ASSERT(if_true->loop_info() == NULL);
         join = new (Z) JoinEntryInstr(if_true->block_id(), if_true->try_index(),
-                                      Thread::kNoDeoptId);
+                                      DeoptId::kNone);
         join->InheritDeoptTarget(Z, if_true);
         if_true->UnuseAllInputs();
         next = if_true->next();
@@ -1459,7 +1464,7 @@ void ConstantPropagator::Transform() {
         // Drop the comparison, which does not have side effects as long
         // as it is a strict compare (the only one we can determine is
         // constant with the current analysis).
-        GotoInstr* jump = new (Z) GotoInstr(join, Thread::kNoDeoptId);
+        GotoInstr* jump = new (Z) GotoInstr(join, DeoptId::kNone);
         jump->InheritDeoptTarget(Z, branch);
 
         Instruction* previous = branch->previous();

@@ -103,7 +103,6 @@ const Register TMP2 = kNoRegister;  // No second assembler scratch register.
 const Register PP = R15;
 const Register SPREG = RSP;          // Stack pointer register.
 const Register FPREG = RBP;          // Frame pointer register.
-const Register ICREG = RBX;          // IC data register.
 const Register ARGS_DESC_REG = R10;  // Arguments descriptor register.
 const Register CODE_REG = R12;
 const Register THR = R14;  // Caches current thread in generated code.
@@ -126,6 +125,8 @@ const RegList kReservedCpuRegisters =
 // CPU registers available to Dart allocator.
 const RegList kDartAvailableCpuRegs =
     kAllCpuRegistersList & ~kReservedCpuRegisters;
+constexpr int kNumberOfDartAvailableCpuRegs = kNumberOfCpuRegisters - 5;
+constexpr int kStoreBufferWrapperSize = 13;
 
 enum ScaleFactor {
   TIMES_1 = 0,

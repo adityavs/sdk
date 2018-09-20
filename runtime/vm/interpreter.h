@@ -6,7 +6,7 @@
 #define RUNTIME_VM_INTERPRETER_H_
 
 #include "vm/globals.h"
-#if defined(DART_USE_INTERPRETER)
+#if !defined(DART_PRECOMPILED_RUNTIME)
 
 #include "vm/compiler/method_recognizer.h"
 #include "vm/constants_kbc.h"
@@ -24,6 +24,7 @@ class RawImmutableArray;
 class RawArray;
 class RawObjectPool;
 class RawFunction;
+class RawSubtypeTestCache;
 class ObjectPointerVisitor;
 
 // Interpreter intrinsic handler. It is invoked on entry to the intrinsified
@@ -52,9 +53,8 @@ class Interpreter {
   uword stack_limit() const { return stack_limit_; }
 
   // Returns true if the interpreter's stack contains the given frame.
-  // TODO(regis): Once the interpreter shares the native stack, we may rely on
-  // a new thread vm_tag to identify an interpreter frame and we will not need
-  // this HasFrame() method.
+  // TODO(regis): We should rely on a new thread vm_tag to identify an
+  // interpreter frame and not need this HasFrame() method.
   bool HasFrame(uword frame) const {
     return frame >= stack_base() && frame <= get_fp();
   }
@@ -62,9 +62,15 @@ class Interpreter {
   // Call on program start.
   static void InitOnce();
 
-  RawObject* Call(const Code& code,
+  RawObject* Call(const Function& function,
                   const Array& arguments_descriptor,
                   const Array& arguments,
+                  Thread* thread);
+
+  RawObject* Call(RawFunction* function,
+                  RawArray* argdesc,
+                  intptr_t argc,
+                  RawObject* const* argv,
                   Thread* thread);
 
   void JumpToFrame(uword pc, uword sp, uword fp, Thread* thread);
@@ -85,15 +91,7 @@ class Interpreter {
     return intrinsics_[id] != NULL;
   }
 
-  enum SpecialIndex {
-    kExceptionSpecialIndex,
-    kStackTraceSpecialIndex,
-    kSpecialIndexCount
-  };
-
   void VisitObjectPointers(ObjectPointerVisitor* visitor);
-
-  bool IsTracing() const;
 
  private:
   uintptr_t* stack_;
@@ -105,12 +103,11 @@ class Interpreter {
   DEBUG_ONLY(uint64_t icount_;)
 
   InterpreterSetjmpBuffer* last_setjmp_buffer_;
-  uword top_exit_frame_info_;
 
   RawObjectPool* pp_;  // Pool Pointer.
   RawArray* argdesc_;  // Arguments Descriptor: used to pass information between
                        // call instruction and the function entry.
-  RawObject* special_[kSpecialIndexCount];
+  RawObject* special_[KernelBytecode::kSpecialIndexCount];
 
   static IntrinsicHandler intrinsics_[kIntrinsicCount];
 
@@ -191,6 +188,13 @@ class Interpreter {
                           RawObject*** SP,
                           uint32_t** pc);
 
+  bool AssertAssignable(Thread* thread,
+                        uint32_t* pc,
+                        RawObject** FP,
+                        RawObject** call_top,
+                        RawObject** args,
+                        RawSubtypeTestCache* cache);
+
 #if defined(DEBUG)
   // Returns true if tracing of executed instructions is enabled.
   bool IsTracingExecution() const;
@@ -211,6 +215,6 @@ class Interpreter {
 
 }  // namespace dart
 
-#endif  // defined(DART_USE_INTERPRETER)
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
 #endif  // RUNTIME_VM_INTERPRETER_H_

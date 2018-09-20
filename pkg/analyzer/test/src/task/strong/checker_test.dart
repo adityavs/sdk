@@ -647,29 +647,29 @@ class G_error extends E implements D {
 typedef dynamic A(dynamic x);
 class B {
   int call(int x) => x;
-  double col(double x) => x;
+  bool col(bool x) => x;
 }
 void main() {
   {
     B f = new B();
     int x;
-    double y;
+    bool y;
     x = f(3);
-    x = /*error:INVALID_ASSIGNMENT*/f.col(3.0);
+    x = /*error:INVALID_ASSIGNMENT*/f.col(true);
     y = /*error:INVALID_ASSIGNMENT*/f(3);
-    y = f.col(3.0);
-    f(/*error:ARGUMENT_TYPE_NOT_ASSIGNABLE*/3.0);
+    y = f.col(true);
+    f(/*error:ARGUMENT_TYPE_NOT_ASSIGNABLE*/true);
     f.col(/*error:ARGUMENT_TYPE_NOT_ASSIGNABLE*/3);
   }
   {
     Function f = new B();
     int x;
-    double y;
+    bool y;
     x = /*info:DYNAMIC_CAST, info:DYNAMIC_INVOKE*/f(3);
-    x = /*info:DYNAMIC_CAST, info:DYNAMIC_INVOKE*/f./*error:UNDEFINED_METHOD*/col(3.0);
+    x = /*info:DYNAMIC_CAST, info:DYNAMIC_INVOKE*/f./*error:UNDEFINED_METHOD*/col(true);
     y = /*info:DYNAMIC_CAST, info:DYNAMIC_INVOKE*/f(3);
-    y = /*info:DYNAMIC_CAST, info:DYNAMIC_INVOKE*/f./*error:UNDEFINED_METHOD*/col(3.0);
-    /*info:DYNAMIC_INVOKE*/f(3.0);
+    y = /*info:DYNAMIC_CAST, info:DYNAMIC_INVOKE*/f./*error:UNDEFINED_METHOD*/col(true);
+    /*info:DYNAMIC_INVOKE*/f(true);
     // Through type propagation, we know f is actually a B, hence the
     // hint.
     /*info:DYNAMIC_INVOKE*/f./*error:UNDEFINED_METHOD*/col(3);
@@ -679,22 +679,22 @@ void main() {
     B b = new B();
     f = /* error:INVALID_ASSIGNMENT*/b;
     int x;
-    double y;
+    bool y;
     x = /*info:DYNAMIC_CAST*/f(3);
     y = /*info:DYNAMIC_CAST*/f(3);
-    f(3.0);
+    f(true);
   }
   {
     dynamic g = new B();
-    /*info:DYNAMIC_INVOKE*/g.call(32.0);
-    /*info:DYNAMIC_INVOKE*/g.col(42.0);
-    /*info:DYNAMIC_INVOKE*/g.foo(42.0);
+    /*info:DYNAMIC_INVOKE*/g.call(true);
+    /*info:DYNAMIC_INVOKE*/g.col(true);
+    /*info:DYNAMIC_INVOKE*/g.foo(true);
     /*info:DYNAMIC_INVOKE*/g.x;
     A f = /* error:INVALID_ASSIGNMENT*/new B();
     B b = new B();
     f = /*error:INVALID_ASSIGNMENT*/b;
-    /*info:DYNAMIC_INVOKE*/f./*error:UNDEFINED_METHOD*/col(42.0);
-    /*info:DYNAMIC_INVOKE*/f./*error:UNDEFINED_METHOD*/foo(42.0);
+    /*info:DYNAMIC_INVOKE*/f./*error:UNDEFINED_METHOD*/col(true);
+    /*info:DYNAMIC_INVOKE*/f./*error:UNDEFINED_METHOD*/foo(true);
     /*info:DYNAMIC_INVOKE*/f./*error:UNDEFINED_GETTER*/x;
   }
 }
@@ -2646,17 +2646,17 @@ class Base {
 }
 
 class T1 extends Base {
-  /*warning:MISMATCHED_GETTER_AND_SETTER_TYPES_FROM_SUPERTYPE,error:INVALID_METHOD_OVERRIDE*/B get f => null;
+  /*error:MISMATCHED_GETTER_AND_SETTER_TYPES_FROM_SUPERTYPE,error:INVALID_METHOD_OVERRIDE*/B get f => null;
 }
 
 class T2 extends Base {
-  /*warning:MISMATCHED_GETTER_AND_SETTER_TYPES_FROM_SUPERTYPE,error:INVALID_METHOD_OVERRIDE*/set f(
+  /*error:MISMATCHED_GETTER_AND_SETTER_TYPES_FROM_SUPERTYPE,error:INVALID_METHOD_OVERRIDE*/set f(
       B b) => null;
 }
 
 class T3 extends Base {
   /*error:INVALID_METHOD_OVERRIDE*/final B
-      /*warning:FINAL_NOT_INITIALIZED*/f;
+      /*error:FINAL_NOT_INITIALIZED*/f;
 }
 class T4 extends Base {
   // two: one for the getter one for the setter.
@@ -2664,11 +2664,11 @@ class T4 extends Base {
 }
 
 class /*error:NON_ABSTRACT_CLASS_INHERITS_ABSTRACT_MEMBER_ONE*/T5 implements Base {
-  /*warning:MISMATCHED_GETTER_AND_SETTER_TYPES_FROM_SUPERTYPE, error:INVALID_METHOD_OVERRIDE*/B get f => null;
+  /*error:MISMATCHED_GETTER_AND_SETTER_TYPES_FROM_SUPERTYPE, error:INVALID_METHOD_OVERRIDE*/B get f => null;
 }
 
 class /*error:NON_ABSTRACT_CLASS_INHERITS_ABSTRACT_MEMBER_ONE*/T6 implements Base {
-  /*warning:MISMATCHED_GETTER_AND_SETTER_TYPES_FROM_SUPERTYPE, error:INVALID_METHOD_OVERRIDE*/set f(B b) => null;
+  /*error:MISMATCHED_GETTER_AND_SETTER_TYPES_FROM_SUPERTYPE, error:INVALID_METHOD_OVERRIDE*/set f(B b) => null;
 }
 
 class /*error:NON_ABSTRACT_CLASS_INHERITS_ABSTRACT_MEMBER_ONE*/T7 implements Base {
@@ -3676,12 +3676,12 @@ class A {
   set b(y) => voidFn();
   void set c(y) => 4;
   void set d(y) => voidFn();
-  /*warning:NON_VOID_RETURN_FOR_SETTER*/int set e(y) => 4;
-  /*warning:NON_VOID_RETURN_FOR_SETTER*/int set f(y) => 
+  /*error:NON_VOID_RETURN_FOR_SETTER*/int set e(y) => 4;
+  /*error:NON_VOID_RETURN_FOR_SETTER*/int set f(y) =>
     /*error:RETURN_OF_INVALID_TYPE*/voidFn();
   set g(y) {return /*error:RETURN_OF_INVALID_TYPE*/4;}
   void set h(y) {return /*error:RETURN_OF_INVALID_TYPE*/4;}
-  /*warning:NON_VOID_RETURN_FOR_SETTER*/int set i(y) {return 4;}
+  /*error:NON_VOID_RETURN_FOR_SETTER*/int set i(y) {return 4;}
 }
 ''');
   }

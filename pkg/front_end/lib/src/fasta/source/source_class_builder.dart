@@ -80,6 +80,8 @@ class SourceClassBuilder extends KernelClassBuilder {
 
   KernelTypeBuilder mixedInType;
 
+  bool isMixinDeclaration;
+
   SourceClassBuilder(
       List<MetadataBuilder> metadata,
       int modifiers,
@@ -94,8 +96,9 @@ class SourceClassBuilder extends KernelClassBuilder {
       int startCharOffset,
       int charOffset,
       int charEndOffset,
-      [ShadowClass cls,
-      this.mixedInType])
+      {Class cls,
+      this.mixedInType,
+      this.isMixinDeclaration = false})
       : actualCls = initializeClass(cls, typeVariables, name, parent,
             startCharOffset, charOffset, charEndOffset),
         super(metadata, modifiers, name, typeVariables, supertype, interfaces,
@@ -141,6 +144,7 @@ class SourceClassBuilder extends KernelClassBuilder {
         supertype?.buildSupertype(library, charOffset, fileUri);
     actualCls.mixedInType =
         mixedInType?.buildMixedInType(library, charOffset, fileUri);
+    actualCls.isMixinDeclaration = isMixinDeclaration;
     // TODO(ahe): If `cls.supertype` is null, and this isn't Object, report a
     // compile-time error.
     cls.isAbstract = isAbstract;
@@ -158,17 +162,18 @@ class SourceClassBuilder extends KernelClassBuilder {
     constructors.forEach((String name, Declaration constructor) {
       Declaration member = scopeBuilder[name];
       if (member == null) return;
+      if (!member.isStatic) return;
       // TODO(ahe): Revisit these messages. It seems like the last two should
       // be `context` parameter to this message.
-      addCompileTimeError(templateConflictsWithMember.withArguments(name),
+      addProblem(templateConflictsWithMember.withArguments(name),
           constructor.charOffset, noLength);
       if (constructor.isFactory) {
-        addCompileTimeError(
+        addProblem(
             templateConflictsWithFactory.withArguments("${this.name}.${name}"),
             member.charOffset,
             noLength);
       } else {
-        addCompileTimeError(
+        addProblem(
             templateConflictsWithConstructor
                 .withArguments("${this.name}.${name}"),
             member.charOffset,

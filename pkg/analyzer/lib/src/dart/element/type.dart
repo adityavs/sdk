@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-library analyzer.src.dart.element.type;
-
 import 'dart:collection';
 
 import 'package:analyzer/dart/ast/token.dart';
@@ -105,14 +103,14 @@ class CircularFunctionTypeImpl extends DynamicTypeImpl
   CircularFunctionTypeImpl() : super._circular();
 
   @override
-  List<ParameterElement> get baseParameters => ParameterElement.EMPTY_LIST;
+  List<ParameterElement> get baseParameters => const <ParameterElement>[];
 
   @override
   DartType get baseReturnType => DynamicTypeImpl.instance;
 
   @override
   List<TypeParameterElement> get boundTypeParameters =>
-      TypeParameterElement.EMPTY_LIST;
+      const <TypeParameterElement>[];
 
   @override
   FunctionTypedElement get element => null;
@@ -125,51 +123,51 @@ class CircularFunctionTypeImpl extends DynamicTypeImpl
 
   @override
   List<FunctionTypeAliasElement> get newPrune =>
-      FunctionTypeAliasElement.EMPTY_LIST;
+      const <FunctionTypeAliasElement>[];
 
   @override
   List<String> get normalParameterNames => <String>[];
 
   @override
-  List<DartType> get normalParameterTypes => DartType.EMPTY_LIST;
+  List<DartType> get normalParameterTypes => const <DartType>[];
 
   @override
   List<String> get optionalParameterNames => <String>[];
 
   @override
-  List<DartType> get optionalParameterTypes => DartType.EMPTY_LIST;
+  List<DartType> get optionalParameterTypes => const <DartType>[];
 
   @override
-  List<ParameterElement> get parameters => ParameterElement.EMPTY_LIST;
+  List<ParameterElement> get parameters => const <ParameterElement>[];
 
   @override
   List<FunctionTypeAliasElement> get prunedTypedefs =>
-      FunctionTypeAliasElement.EMPTY_LIST;
+      const <FunctionTypeAliasElement>[];
 
   @override
   DartType get returnType => DynamicTypeImpl.instance;
 
   @override
-  List<DartType> get typeArguments => DartType.EMPTY_LIST;
+  List<DartType> get typeArguments => const <DartType>[];
 
   @override
-  List<TypeParameterElement> get typeFormals => TypeParameterElement.EMPTY_LIST;
+  List<TypeParameterElement> get typeFormals => const <TypeParameterElement>[];
 
   @override
   List<TypeParameterElement> get typeParameters =>
-      TypeParameterElement.EMPTY_LIST;
+      const <TypeParameterElement>[];
 
   @override
   bool get _isInstantiated => false;
 
   @override
-  List<ParameterElement> get _parameters => ParameterElement.EMPTY_LIST;
+  List<ParameterElement> get _parameters => const <ParameterElement>[];
 
   @override
   DartType get _returnType => DynamicTypeImpl.instance;
 
   @override
-  List<DartType> get _typeArguments => DartType.EMPTY_LIST;
+  List<DartType> get _typeArguments => const <DartType>[];
 
   @override
   void set _typeArguments(List<DartType> arguments) {
@@ -178,7 +176,7 @@ class CircularFunctionTypeImpl extends DynamicTypeImpl
 
   @override
   List<TypeParameterElement> get _typeParameters =>
-      TypeParameterElement.EMPTY_LIST;
+      const <TypeParameterElement>[];
 
   @override
   void set _typeParameters(List<TypeParameterElement> parameters) {
@@ -404,6 +402,7 @@ abstract class FunctionTypeImpl extends TypeImpl implements FunctionType {
     var freshVarElements = <TypeParameterElement>[];
     for (int i = 0; i < formalCount; i++) {
       var typeParamElement = originalFormals[i];
+
       var freshElement =
           new TypeParameterElementImpl.synthetic(typeParamElement.name);
       var freshTypeVar = new TypeParameterTypeImpl(freshElement);
@@ -763,12 +762,12 @@ abstract class FunctionTypeImpl extends TypeImpl implements FunctionType {
         type,
         (DartType t, DartType s) =>
             (t as TypeImpl).isMoreSpecificThan(s, withDynamic),
-        new TypeSystemImpl(null).instantiateToBounds);
+        new StrongTypeSystemImpl(null).instantiateToBounds);
   }
 
   @override
   bool isSubtypeOf(DartType type) {
-    var typeSystem = new TypeSystemImpl(null);
+    var typeSystem = new StrongTypeSystemImpl(null);
     return FunctionTypeImpl.relate(
         typeSystem.instantiateToBounds(this),
         typeSystem.instantiateToBounds(type),
@@ -795,7 +794,7 @@ abstract class FunctionTypeImpl extends TypeImpl implements FunctionType {
   void _freeVariablesInFunctionType(
       FunctionType type, Set<TypeParameterType> free) {
     // Make some fresh variables to avoid capture.
-    List<DartType> typeArgs = DartType.EMPTY_LIST;
+    List<DartType> typeArgs = const <DartType>[];
     if (type.typeFormals.isNotEmpty) {
       typeArgs = new List<DartType>.from(type.typeFormals.map((e) =>
           new TypeParameterTypeImpl(new TypeParameterElementImpl(e.name, -1))));
@@ -847,7 +846,7 @@ abstract class FunctionTypeImpl extends TypeImpl implements FunctionType {
     // For now though, this is a pretty quick operation.
     if (g.typeFormals.isEmpty) {
       assert(g == f);
-      return DartType.EMPTY_LIST;
+      return const <DartType>[];
     }
     assert(f.typeFormals.isEmpty);
     assert(g.typeFormals.length <= f.typeArguments.length);
@@ -1145,7 +1144,7 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
   /**
    * A list containing the actual types of the type arguments.
    */
-  List<DartType> _typeArguments = DartType.EMPTY_LIST;
+  List<DartType> _typeArguments = const <DartType>[];
 
   /**
    * If not `null` and [_typeArguments] is `null`, the actual type arguments
@@ -1274,7 +1273,7 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
   }
 
   @override
-  ClassElement get element => super.element as ClassElement;
+  ClassElement get element => super.element;
 
   @override
   int get hashCode {
@@ -1340,7 +1339,7 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
   }
 
   @override
-  bool get isObject => element.supertype == null;
+  bool get isObject => element.supertype == null && !element.isMixin;
 
   @override
   List<MethodElement> get methods {
@@ -1358,19 +1357,8 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
 
   @override
   List<InterfaceType> get mixins {
-    ClassElement classElement = element;
-    List<InterfaceType> mixins = classElement.mixins;
-    List<TypeParameterElement> typeParameters = classElement.typeParameters;
-    List<DartType> parameterTypes = classElement.type.typeArguments;
-    if (typeParameters.length == 0) {
-      return mixins;
-    }
-    int count = mixins.length;
-    List<InterfaceType> typedMixins = new List<InterfaceType>(count);
-    for (int i = 0; i < count; i++) {
-      typedMixins[i] = mixins[i].substitute2(typeArguments, parameterTypes);
-    }
-    return typedMixins;
+    List<InterfaceType> mixins = element.mixins;
+    return _instantiateSuperTypes(mixins);
   }
 
   @override
@@ -1386,6 +1374,12 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
       return supertype;
     }
     return supertype.substitute2(typeArguments, typeParameters);
+  }
+
+  @override
+  List<InterfaceType> get superclassConstraints {
+    List<InterfaceType> constraints = element.superclassConstraints;
+    return _instantiateSuperTypes(constraints);
   }
 
   @override
@@ -1501,10 +1495,9 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
     ClassElement jElement = j.element;
     InterfaceType supertype = jElement.supertype;
     //
-    // If J has no direct supertype then it is Object, and Object has no direct
-    // supertypes.
+    // If J is Object, then it has no direct supertypes.
     //
-    if (supertype == null) {
+    if (j.isObject) {
       return false;
     }
     //
@@ -1515,6 +1508,15 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
     supertype = supertype.substitute2(jArgs, jVars);
     if (supertype == i) {
       return true;
+    }
+    //
+    // I is listed in the on clause of J.
+    //
+    for (InterfaceType interfaceType in jElement.superclassConstraints) {
+      interfaceType = interfaceType.substitute2(jArgs, jVars);
+      if (interfaceType == i) {
+        return true;
+      }
     }
     //
     // I is listed in the implements clause of J.
@@ -1698,6 +1700,12 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
         return element;
       }
     }
+    for (InterfaceType constraint in superclassConstraints) {
+      PropertyAccessorElement element = constraint.getGetter(getterName);
+      if (element != null && element.isAccessibleIn(library)) {
+        return element;
+      }
+    }
     HashSet<ClassElement> visitedClasses = new HashSet<ClassElement>();
     InterfaceType supertype = superclass;
     ClassElement supertypeElement = supertype?.element;
@@ -1752,6 +1760,69 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
         (InterfaceType t) => t.getGetter(name) ?? t.getMethod(name));
   }
 
+  ExecutableElement lookUpInheritedMember(String name, LibraryElement library,
+      {bool concrete: false, bool setter: false}) {
+    HashSet<ClassElement> visitedClasses = new HashSet<ClassElement>();
+
+    ExecutableElement lookUpImpl(InterfaceTypeImpl type,
+        {bool acceptAbstract: false, bool includeType: true}) {
+      if (type == null || !visitedClasses.add(type.element)) {
+        return null;
+      }
+
+      if (includeType) {
+        ExecutableElement result;
+        if (setter) {
+          result = type.getSetter(name);
+        } else {
+          result = type.getMethod(name);
+          result ??= type.getGetter(name);
+        }
+        if (result != null && result.isAccessibleIn(library)) {
+          if (!concrete || acceptAbstract || !result.isAbstract) {
+            return result;
+          }
+          ClassElementImpl elementImpl = type.element;
+          if (elementImpl.hasNoSuchMethod) {
+            return result;
+          }
+        }
+      }
+
+      for (InterfaceType mixin in type.mixins.reversed) {
+        var result = lookUpImpl(mixin, acceptAbstract: acceptAbstract);
+        if (result != null) {
+          return result;
+        }
+      }
+
+      // We were not able to find the concrete dispatch target.
+      // It is OK to look into interfaces, we need just some resolution now.
+      if (!concrete) {
+        for (InterfaceType mixin in type.interfaces) {
+          var result = lookUpImpl(mixin, acceptAbstract: acceptAbstract);
+          if (result != null) {
+            return result;
+          }
+        }
+      }
+
+      return lookUpImpl(type.superclass, acceptAbstract: acceptAbstract);
+    }
+
+    if (element.isMixin) {
+      for (InterfaceType constraint in superclassConstraints) {
+        var result = lookUpImpl(constraint, acceptAbstract: true);
+        if (result != null) {
+          return result;
+        }
+      }
+      return null;
+    } else {
+      return lookUpImpl(this, includeType: false);
+    }
+  }
+
   @override
   MethodElement lookUpInheritedMethod(String name,
       {LibraryElement library, bool thisType: true}) {
@@ -1802,6 +1873,12 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
         return element;
       }
     }
+    for (InterfaceType constraint in superclassConstraints) {
+      MethodElement element = constraint.getMethod(methodName);
+      if (element != null && element.isAccessibleIn(library)) {
+        return element;
+      }
+    }
     HashSet<ClassElement> visitedClasses = new HashSet<ClassElement>();
     InterfaceType supertype = superclass;
     ClassElement supertypeElement = supertype?.element;
@@ -1838,6 +1915,12 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
       String setterName, LibraryElement library) {
     for (InterfaceType mixin in mixins.reversed) {
       PropertyAccessorElement element = mixin.getSetter(setterName);
+      if (element != null && element.isAccessibleIn(library)) {
+        return element;
+      }
+    }
+    for (InterfaceType constraint in superclassConstraints) {
+      PropertyAccessorElement element = constraint.getSetter(setterName);
       if (element != null && element.isAccessibleIn(library)) {
         return element;
       }
@@ -1926,6 +2009,20 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
     }
   }
 
+  List<InterfaceType> _instantiateSuperTypes(List<InterfaceType> defined) {
+    List<TypeParameterElement> typeParameters = element.typeParameters;
+    if (typeParameters.isEmpty) {
+      return defined;
+    }
+    List<DartType> instantiated = element.type.typeArguments;
+    int count = defined.length;
+    List<InterfaceType> typedConstraints = new List<InterfaceType>(count);
+    for (int i = 0; i < count; i++) {
+      typedConstraints[i] = defined[i].substitute2(typeArguments, instantiated);
+    }
+    return typedConstraints;
+  }
+
   /**
    * Starting from this type, search its class hierarchy for types of the form
    * Future<R>, and return a list of the resulting R's.
@@ -1960,10 +2057,10 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
    * the analyzer), `null` is returned.
    */
   static InterfaceType computeLeastUpperBound(InterfaceType i, InterfaceType j,
-      {bool strong = false}) {
+      {@deprecated bool strong = true}) {
     // compute set of supertypes
-    Set<InterfaceType> si = computeSuperinterfaceSet(i, strong: strong);
-    Set<InterfaceType> sj = computeSuperinterfaceSet(j, strong: strong);
+    Set<InterfaceType> si = computeSuperinterfaceSet(i);
+    Set<InterfaceType> sj = computeSuperinterfaceSet(j);
     // union si with i and sj with j
     si.add(i);
     sj.add(j);
@@ -1988,8 +2085,8 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
    * See [computeLeastUpperBound].
    */
   static Set<InterfaceType> computeSuperinterfaceSet(InterfaceType type,
-          {bool strong = false}) =>
-      _computeSuperinterfaceSet(type, new HashSet<InterfaceType>(), strong);
+          {@deprecated bool strong = true}) =>
+      _computeSuperinterfaceSet(type, new HashSet<InterfaceType>(), true);
 
   /**
    * Return the type from the [types] list that has the longest inheritance path
@@ -2114,33 +2211,44 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
       InterfaceType type, int depth, HashSet<ClassElement> visitedTypes) {
     ClassElement classElement = type.element;
     // Object case
-    if (classElement.supertype == null || visitedTypes.contains(classElement)) {
+    if (type.isObject || visitedTypes.contains(classElement)) {
       return depth;
     }
     int longestPath = 1;
     try {
       visitedTypes.add(classElement);
-      List<InterfaceType> superinterfaces = classElement.interfaces;
       int pathLength;
-      if (superinterfaces.length > 0) {
-        // loop through each of the superinterfaces recursively calling this
-        // method and keeping track of the longest path to return
-        for (InterfaceType superinterface in superinterfaces) {
-          pathLength = _computeLongestInheritancePathToObject(
-              superinterface, depth + 1, visitedTypes);
-          if (pathLength > longestPath) {
-            longestPath = pathLength;
-          }
+
+      // loop through each of the superinterfaces recursively calling this
+      // method and keeping track of the longest path to return
+      for (InterfaceType interface in classElement.superclassConstraints) {
+        pathLength = _computeLongestInheritancePathToObject(
+            interface, depth + 1, visitedTypes);
+        if (pathLength > longestPath) {
+          longestPath = pathLength;
         }
       }
+
+      // loop through each of the superinterfaces recursively calling this
+      // method and keeping track of the longest path to return
+      for (InterfaceType interface in classElement.interfaces) {
+        pathLength = _computeLongestInheritancePathToObject(
+            interface, depth + 1, visitedTypes);
+        if (pathLength > longestPath) {
+          longestPath = pathLength;
+        }
+      }
+
       // finally, perform this same check on the super type
       // TODO(brianwilkerson) Does this also need to add in the number of mixin
       // classes?
       InterfaceType supertype = classElement.supertype;
-      pathLength = _computeLongestInheritancePathToObject(
-          supertype, depth + 1, visitedTypes);
-      if (pathLength > longestPath) {
-        longestPath = pathLength;
+      if (supertype != null) {
+        pathLength = _computeLongestInheritancePathToObject(
+            supertype, depth + 1, visitedTypes);
+        if (pathLength > longestPath) {
+          longestPath = pathLength;
+        }
       }
     } finally {
       visitedTypes.remove(classElement);
@@ -2158,21 +2266,21 @@ class InterfaceTypeImpl extends TypeImpl implements InterfaceType {
    * See [computeSuperinterfaceSet], and [computeLeastUpperBound].
    */
   static Set<InterfaceType> _computeSuperinterfaceSet(
-      InterfaceType type, HashSet<InterfaceType> set, bool strong) {
+      InterfaceType type, HashSet<InterfaceType> set, bool _) {
     Element element = type.element;
     if (element != null) {
       List<InterfaceType> superinterfaces = type.interfaces;
       for (InterfaceType superinterface in superinterfaces) {
-        if (!strong || !superinterface.isDartCoreFunction) {
+        if (!superinterface.isDartCoreFunction) {
           if (set.add(superinterface)) {
-            _computeSuperinterfaceSet(superinterface, set, strong);
+            _computeSuperinterfaceSet(superinterface, set, true);
           }
         }
       }
       InterfaceType supertype = type.superclass;
-      if (supertype != null && (!strong || !supertype.isDartCoreFunction)) {
+      if (supertype != null && !supertype.isDartCoreFunction) {
         if (set.add(supertype)) {
-          _computeSuperinterfaceSet(supertype, set, strong);
+          _computeSuperinterfaceSet(supertype, set, true);
         }
       }
     }
@@ -2752,7 +2860,7 @@ class TypeParameterTypeImpl extends TypeImpl implements TypeParameterType {
       List<TypeParameterElement> typeParameters) {
     int count = typeParameters.length;
     if (count == 0) {
-      return TypeParameterType.EMPTY_LIST;
+      return const <TypeParameterType>[];
     }
     List<TypeParameterType> types = new List<TypeParameterType>(count);
     for (int i = 0; i < count; i++) {
@@ -3057,7 +3165,7 @@ class _FunctionTypeImplLazy extends FunctionTypeImpl {
       // make it generic, which will allow it to return List<DartType> instead
       // of List<TypeParameterType>.
       if (typeParameters.isEmpty) {
-        _typeArguments = DartType.EMPTY_LIST;
+        _typeArguments = const <DartType>[];
       } else {
         _typeArguments = new List<DartType>.from(
             typeParameters.map((t) => t.type),
@@ -3070,12 +3178,12 @@ class _FunctionTypeImplLazy extends FunctionTypeImpl {
   @override
   List<TypeParameterElement> get typeFormals {
     if (_isInstantiated || element == null) {
-      return TypeParameterElement.EMPTY_LIST;
+      return const <TypeParameterElement>[];
     }
     List<TypeParameterElement> baseTypeFormals = element.typeParameters;
     int formalCount = baseTypeFormals.length;
     if (formalCount == 0) {
-      return TypeParameterElement.EMPTY_LIST;
+      return const <TypeParameterElement>[];
     }
 
     // Create type formals with specialized bounds.

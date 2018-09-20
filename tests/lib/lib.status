@@ -24,6 +24,7 @@ convert/utf85_test: Slow, Pass
 developer/timeline_test: Skip # Not supported
 math/double_pow_test: RuntimeError
 math/low_test: RuntimeError
+mirrors/*: SkipByDesign # mirrors not supported
 mirrors/class_declarations_test/none: RuntimeError # Issue 13440
 mirrors/class_mirror_location_test: RuntimeError # Issue 6490
 mirrors/closurization_equivalence_test: RuntimeError # Issue 6490
@@ -114,6 +115,7 @@ mirrors/typevariable_mirror_metadata_test: RuntimeError # Issue 10905
 mirrors/variable_is_const_test/none: RuntimeError # Issue 14671
 profiler/metrics_num_test: Skip # Because of a int / double type test.
 typed_data/int32x4_bigint_test: Pass
+typed_data/int64_list_load_store_test: CompileTimeError, OK # Error if web int literal cannot be represented exactly, see http://dartbug.com/33351
 typed_data/int64_list_load_store_test: RuntimeError # Issue 10275
 typed_data/typed_data_hierarchy_int64_test: RuntimeError # Issue 10275
 
@@ -132,6 +134,7 @@ developer/timeline_test: Skip # Not supported
 
 [ $runtime == ff ]
 convert/streamed_conversion_utf8_decode_test: Pass, Slow # Issue 12029, FF setTimeout can fire early: https://bugzilla.mozilla.org/show_bug.cgi?id=291386
+convert/utf85_test: SkipSlow
 mirrors/mirrors_reader_test: Timeout, Slow, RuntimeError # Issue 16589, FF setTimeout can fire early: https://bugzilla.mozilla.org/show_bug.cgi?id=291386
 
 [ $runtime == flutter ]
@@ -143,9 +146,74 @@ async/stream_empty_test: Skip # Flutter Issue 9113
 async/stream_event_transformed_test: Skip # Flutter Issue 9113
 mirrors/*: Skip # Flutter does not support mirrors.
 
+[ $runtime == none ]
+convert/html_escape_test: CompileTimeError # Uppercase constants removed
+
 [ $runtime != none ]
 async/stream_controller_async_test: RuntimeError # Library changed.
+async/stream_empty_test: RuntimeError # Uppercase constants removed
 async/stream_from_iterable_test: RuntimeError # Library changed.
+async/stream_iterator_test: RuntimeError # Uppercase constants removed
+async/stream_listen_zone_test: RuntimeError # Uppercase constants removed
+async/zone_bind_callback_test: RuntimeError # Uppercase constants removed
+async/zone_bind_callback_unary_test: RuntimeError # Uppercase constants removed
+async/zone_bind_test: RuntimeError # Uppercase constants removed
+async/zone_create_periodic_timer_test: RuntimeError # Uppercase constants removed
+async/zone_create_timer2_test: RuntimeError # Uppercase constants removed
+async/zone_create_timer_test: RuntimeError # Uppercase constants removed
+async/zone_debug_test: RuntimeError # Uppercase constants removed
+async/zone_empty_description2_test: RuntimeError # Uppercase constants removed
+async/zone_empty_description_test: RuntimeError # Uppercase constants removed
+async/zone_fork_test: RuntimeError # Uppercase constants removed
+async/zone_register_callback_test: RuntimeError # Uppercase constants removed
+async/zone_register_callback_unary_test: RuntimeError # Uppercase constants removed
+async/zone_root_bind_test: RuntimeError # Uppercase constants removed
+async/zone_run_guarded_test: RuntimeError # Uppercase constants removed
+async/zone_run_test: RuntimeError # Uppercase constants removed
+async/zone_run_unary_test: RuntimeError # Uppercase constants removed
+async/zone_value_test: RuntimeError # Uppercase constants removed
+convert/ascii_test: RuntimeError # Uppercase constants removed
+convert/base64_test/none: RuntimeError # Uppercase constants removed
+convert/chunked_conversion_json_decode1_test: RuntimeError # Uppercase constants removed
+convert/chunked_conversion_utf85_test: RuntimeError # Uppercase constants removed
+convert/chunked_conversion_utf87_test: RuntimeError # Uppercase constants removed
+convert/chunked_conversion_utf88_test: RuntimeError # Uppercase constants removed
+convert/codec2_test: RuntimeError # Uppercase constants removed
+convert/encoding_test: RuntimeError # Uppercase constants removed
+convert/html_escape_test: CompileTimeError # Uppercase constants removed
+convert/json_chunk_test: RuntimeError # Uppercase constants removed
+convert/json_lib_test: RuntimeError # Uppercase constants removed
+convert/json_pretty_test: RuntimeError # Uppercase constants removed
+convert/json_test: RuntimeError # Uppercase constants removed
+convert/json_util_test: RuntimeError # Uppercase constants removed
+convert/latin1_test: RuntimeError # Uppercase constants removed
+convert/line_splitter_test: RuntimeError # Uppercase constants removed
+convert/streamed_conversion_json_encode1_test: RuntimeError # Uppercase constants removed
+convert/streamed_conversion_json_utf8_decode_test: RuntimeError # Uppercase constants removed
+convert/streamed_conversion_json_utf8_encode_test: RuntimeError # Uppercase constants removed
+convert/streamed_conversion_utf8_decode_test: RuntimeError # Uppercase constants removed
+convert/streamed_conversion_utf8_encode_test: RuntimeError # Uppercase constants removed
+convert/utf83_test: RuntimeError # Uppercase constants removed
+convert/utf84_test: RuntimeError # Uppercase constants removed
+convert/utf85_test: RuntimeError # Uppercase constants removed
+convert/utf8_encode_test: RuntimeError # Uppercase constants removed
+convert/utf8_test: RuntimeError # Uppercase constants removed
+math/math2_test: RuntimeError # Uppercase constants removed
+math/math_parse_double_test: RuntimeError # Uppercase constants removed
+math/math_test: RuntimeError # Uppercase constants removed
+mirrors/invocation_fuzz_test/emptyarray: RuntimeError # Uppercase constants removed
+mirrors/invocation_fuzz_test/false: RuntimeError # Uppercase constants removed
+mirrors/invocation_fuzz_test/none: RuntimeError # Uppercase constants removed
+mirrors/invocation_fuzz_test/smi: RuntimeError # Uppercase constants removed
+mirrors/invocation_fuzz_test/string: RuntimeError # Uppercase constants removed
+typed_data/endianness_test: RuntimeError # Uppercase constants removed
+typed_data/float32x4_cross_test: RuntimeError # Uppercase constants removed
+typed_data/float32x4_list_test: RuntimeError # Uppercase constants removed
+typed_data/float32x4_shuffle_test: RuntimeError # Uppercase constants removed
+typed_data/float32x4_test: RuntimeError # Uppercase constants removed
+typed_data/float32x4_transpose_test: RuntimeError # Uppercase constants removed
+typed_data/float32x4_two_arg_shuffle_test: RuntimeError # Uppercase constants removed
+typed_data/int32x4_shuffle_test: RuntimeError # Uppercase constants removed
 
 [ $runtime == safari ]
 convert/json_test: Fail # https://bugs.webkit.org/show_bug.cgi?id=134920
@@ -212,6 +280,10 @@ mirrors/*deferred*: Pass, RuntimeError # Issue 17458
 [ $compiler == dart2js && $runtime == d8 && $fasta ]
 js/null_test: RuntimeError
 
+[ $compiler == dart2js && $runtime == ie11 ]
+math/math2_test: RuntimeError
+math/math_test: RuntimeError
+
 [ $compiler == dart2js && $runtime == jsshell ]
 async/catch_errors12_test: Fail # Timer interface not supported: Issue 7728.
 async/catch_errors13_test: Fail # Timer interface not supported: Issue 7728.
@@ -252,10 +324,10 @@ mirrors/mirrors_reader_test: Skip # Running in v8 suffices. Issue 16589 - Runtim
 [ $compiler == dart2js && $checked ]
 convert/utf85_test: Pass, Slow # Issue 12029.
 
-[ $compiler == dart2js && $checked && $fast_startup && $fasta && $minified ]
+[ $compiler == dart2js && $checked && $fast_startup && $minified ]
 async/stream_listen_zone_test: RuntimeError
 
-[ $compiler == dart2js && $checked && $fasta && $host_checked ]
+[ $compiler == dart2js && $checked && $host_checked ]
 async/stream_listen_zone_test: RuntimeError
 
 [ $compiler == dart2js && $fast_startup ]
@@ -276,14 +348,8 @@ mirrors/regress_16321_test/01: Pass # expects failure, but if fails for the wron
 mirrors/syntax_error_test/01: Pass # expects failure, but it fails for the wrong reason
 mirrors/variable_is_const_test/01: Pass # expects failure, but it fails for the wrong reason
 
-[ $compiler == dart2js && $fasta ]
-mirrors/*: SkipByDesign # mirrors not supported
-typed_data/int64_list_load_store_test: CompileTimeError, OK # Error if web int literal cannot be represented exactly, see http://dartbug.com/33351
-
-[ $compiler == dart2js && $fasta && $host_checked ]
-async/stream_controller_async_test: Crash
-
 [ $compiler == dart2js && $host_checked ]
+async/stream_controller_async_test: Crash
 mirrors/metadata_allowed_values_test/28: Crash # Issue 25911
 mirrors/metadata_allowed_values_test/29: Crash # Issue 25911
 mirrors/metadata_allowed_values_test/30: Crash # Issue 25911
@@ -296,16 +362,12 @@ mirrors/mirrors_used_get_name_test: RuntimeError
 [ $compiler == dart2js && ($runtime == d8 || $browser) ]
 async/timer_not_available_test: Fail, OK # only meant to test when there is no way to implement timer (currently only in jsshell)
 
-[ $compiler == dart2js && ($runtime == drt || $runtime == ie11) ]
-math/math2_test: RuntimeError
-math/math_test: RuntimeError
-
 [ $compiler != dart2js && $fasta ]
 convert/utf82_test: CompileTimeError # Note: dart2js passes for the wrong reason, it hasn't switched to run in 64-bits
 js/datetime_roundtrip_test: CompileTimeError
 js/null_test: CompileTimeError
 
-[ $compiler != dartk && $compiler != dartkp && ($runtime == dart_precompiled || $runtime == flutter || $runtime == vm) ]
+[ $compiler != dartk && $compiler != dartkb && $compiler != dartkp && ($runtime == dart_precompiled || $runtime == flutter || $runtime == vm) ]
 mirrors/initializing_formals_test/01: Fail # initializing formals are implicitly final as of Dart 1.21
 
 [ $compiler == none && $mode == product ]
@@ -322,9 +384,6 @@ mirrors/native_class_test: Pass, Slow
 [ $runtime == chrome && $system == macos ]
 async/catch_errors11_test: Pass, Timeout # Issue 22696
 async/timer_isActive_test: Fail, Pass, Timeout # Issue 22696
-
-[ $runtime == ff && $system == windows ]
-convert/utf85_test: Pass, Slow, Timeout
 
 [ $runtime != none && !$strong ]
 async/stream_first_where_test: RuntimeError
@@ -378,7 +437,7 @@ mirrors/symbol_validation_test: RuntimeError # Issue 13596
 
 # All these tests have been migrated as strong mode compatible tests to
 # lib_2, so skipping these tests for dartk and dartkp
-[ $compiler == app_jitk || $compiler == dartk || $compiler == dartkp ]
+[ $compiler == app_jitk || $compiler == dartk || $compiler == dartkb || $compiler == dartkp ]
 *: SkipByDesign
 
 [ $runtime == chrome || $runtime == ff ]

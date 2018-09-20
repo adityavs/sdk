@@ -151,6 +151,21 @@ library libA; class A { const A({int one, String two: 'defaultValue'}); }''');
         namedArgumentsWithTypes: {'one': 'int', 'two': 'String'});
   }
 
+  test_Annotation_importedConstructor_prefixed() async {
+    addSource('/libA.dart', '''
+class A {
+  const A({int value});
+}
+''');
+    addTestSource('''
+import "${convertPathForImport("/libA.dart")}" as p;
+@p.A(^)
+main() {}
+''');
+    await computeSuggestions();
+    assertSuggestArgumentsAndTypes(namedArgumentsWithTypes: {'value': 'int'});
+  }
+
   test_Annotation_local_constructor_named_param() async {
     addTestSource('''
 class A { const A({int one, String two: 'defaultValue'}); }
@@ -417,13 +432,17 @@ class CustomScrollView extends Widget {
 
   test_ArgumentList_Flutter_MethodExpression_children() async {
     // Ensure we don't generate params for a method call
+    // TODO(brianwilkerson) This test has been changed so that it no longer has
+    // anything to do with Flutter (by moving the declaration of `foo` out of
+    // the 'material' library). Determine whether the test is still valid.
     addFlutterPackage();
 
     addTestSource('''
 import 'package:flutter/material.dart';
 
 main() {
-foo(^);
+  foo(^);
+}
 
 foo({String children}) {}
 ''');
@@ -891,7 +910,6 @@ main() { new A(^);}''');
   test_ArgumentList_local_function_1() async {
     // ArgumentList  MethodInvocation  ExpressionStatement  Block
     addTestSource('''
-      import '${convertPathForImport('/libA.dart')}'
       expect(arg) { }
       class B { }
       String bar() => true;
@@ -903,7 +921,6 @@ main() { new A(^);}''');
   test_ArgumentList_local_function_2() async {
     // ArgumentList  MethodInvocation  ExpressionStatement  Block
     addTestSource('''
-      import '${convertPathForImport('/libA.dart')}'
       expect(arg1, int arg2) { }
       class B { }
       String bar() => true;
@@ -915,7 +932,6 @@ main() { new A(^);}''');
   test_ArgumentList_local_function_3() async {
     // ArgumentList  MethodInvocation  ExpressionStatement  Block
     addTestSource('''
-      import '${convertPathForImport('/libA.dart')}'
       expect(arg1, int arg2) { }
       class B { }
       String bar() => true;
@@ -927,7 +943,6 @@ main() { new A(^);}''');
   test_ArgumentList_local_function_3a() async {
     // ArgumentList  MethodInvocation  ExpressionStatement  Block
     addTestSource('''
-      import '${convertPathForImport('/libA.dart')}'
       expect(arg1, int arg2, {bool arg3}) { }
       class B { }
       String bar() => true;
@@ -939,7 +954,6 @@ main() { new A(^);}''');
   test_ArgumentList_local_function_3b() async {
     // ArgumentList  MethodInvocation  ExpressionStatement  Block
     addTestSource('''
-      import '${convertPathForImport('/libA.dart')}'
       expect(arg1, int arg2, {bool arg3}) { }
       class B { }
       String bar() => true;
@@ -951,7 +965,6 @@ main() { new A(^);}''');
   test_ArgumentList_local_function_3c() async {
     // ArgumentList  MethodInvocation  ExpressionStatement  Block
     addTestSource('''
-      import '${convertPathForImport('/libA.dart')}'
       expect(arg1, int arg2, {bool arg3}) { }
       class B { }
       String bar() => true;
@@ -963,7 +976,6 @@ main() { new A(^);}''');
   test_ArgumentList_local_function_3d() async {
     // ArgumentList  MethodInvocation  ExpressionStatement  Block
     addTestSource('''
-      import '${convertPathForImport('/libA.dart')}'
       expect(arg1, int arg2, {bool arg3}) { }
       class B { }
       String bar() => true;

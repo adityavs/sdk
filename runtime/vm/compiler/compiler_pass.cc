@@ -223,6 +223,7 @@ void CompilerPass::RunPipeline(PipelineMode mode,
   INVOKE_PASS(TypePropagation);
   INVOKE_PASS(ApplyClassIds);
   INVOKE_PASS(TypePropagation);
+  INVOKE_PASS(ApplyICData);
   INVOKE_PASS(Canonicalize);
   INVOKE_PASS(BranchSimplify);
   INVOKE_PASS(IfConvert);
@@ -230,6 +231,15 @@ void CompilerPass::RunPipeline(PipelineMode mode,
   INVOKE_PASS(ConstantPropagation);
   INVOKE_PASS(OptimisticallySpecializeSmiPhis);
   INVOKE_PASS(TypePropagation);
+#if defined(DART_PRECOMPILER)
+  if (mode == kAOT) {
+    // The extra call specialization pass in AOT is able to specialize more
+    // calls after ConstantPropagation, which removes unreachable code, and
+    // TypePropagation, which can infer more accurate types after removing
+    // unreachable code.
+    INVOKE_PASS(ApplyICData);
+  }
+#endif
   INVOKE_PASS(WidenSmiToInt32);
   INVOKE_PASS(SelectRepresentations);
   INVOKE_PASS(CSE);
@@ -257,6 +267,7 @@ void CompilerPass::RunPipeline(PipelineMode mode,
     INVOKE_PASS(ReplaceArrayBoundChecksForAOT);
   }
 #endif
+  INVOKE_PASS(WriteBarrierElimination);
   INVOKE_PASS(FinalizeGraph);
   INVOKE_PASS(AllocateRegisters);
   if (mode == kJIT) {
@@ -369,7 +380,7 @@ COMPILER_PASS(EliminateDeadPhis,
 
 COMPILER_PASS(AllocationSinking_Sink, {
   // TODO(vegorov): Support allocation sinking with try-catch.
-  if (flow_graph->graph_entry()->SuccessorCount() == 1) {
+  if (flow_graph->graph_entry()->catch_entries().is_empty()) {
     state->sinking = new AllocationSinking(flow_graph);
     state->sinking->Optimize();
   }
@@ -396,6 +407,38 @@ COMPILER_PASS(ReorderBlocks, {
     state->block_scheduler->ReorderBlocks();
   }
 });
+
+static void WriteBarrierElimination(FlowGraph* flow_graph) {
+  for (BlockIterator block_it = flow_graph->reverse_postorder_iterator();
+       !block_it.Done(); block_it.Advance()) {
+    BlockEntryInstr* block = block_it.Current();
+    Definition* last_allocated = nullptr;
+    for (ForwardInstructionIterator it(block); !it.Done(); it.Advance()) {
+      Instruction* current = it.Current();
+      if (StoreInstanceFieldInstr* instr = current->AsStoreInstanceField()) {
+        if (!current->CanTriggerGC()) {
+          if (instr->instance()->definition() == last_allocated) {
+            instr->set_emit_store_barrier(kNoStoreBarrier);
+          }
+          continue;
+        }
+      }
+
+      AllocationInstr* alloc = current->AsAllocation();
+      if (alloc != nullptr && alloc->WillAllocateNewOrRemembered()) {
+        last_allocated = alloc;
+        continue;
+      }
+
+      if (current->CanTriggerGC()) {
+        last_allocated = nullptr;
+      }
+    }
+  }
+}
+
+COMPILER_PASS(WriteBarrierElimination,
+              { WriteBarrierElimination(flow_graph); });
 
 COMPILER_PASS(FinalizeGraph, {
   // Compute and store graph informations (call & instruction counts)

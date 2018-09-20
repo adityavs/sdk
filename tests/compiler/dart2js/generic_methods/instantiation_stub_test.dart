@@ -10,7 +10,7 @@ import 'package:compiler/src/js_emitter/model.dart';
 import 'package:compiler/src/world.dart';
 import 'package:expect/expect.dart';
 import '../helpers/program_lookup.dart';
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 const String code = '''
 import 'package:meta/dart2js.dart';
@@ -66,7 +66,7 @@ main() {
   asyncTest(() async {
     CompilationResult result = await runCompiler(
         memorySourceFiles: {'main.dart': code},
-        options: [Flags.strongMode, Flags.omitImplicitChecks]);
+        options: [Flags.omitImplicitChecks]);
     Expect.isTrue(result.isSuccess);
     Compiler compiler = result.compiler;
     JClosedWorld closedWorld = compiler.backendClosedWorldForTesting;
@@ -87,11 +87,11 @@ main() {
           "Expected: $expectedStubs\n Actual: $actualStubs");
     }
 
-    checkStubs(closedWorld.commonElements.instantiation1Class,
+    checkStubs(closedWorld.commonElements.getInstantiationClass(1),
         [r'call$1', r'$signature']);
-    checkStubs(closedWorld.commonElements.instantiation2Class,
+    checkStubs(closedWorld.commonElements.getInstantiationClass(2),
         [r'call$2', r'$signature']);
-    checkStubs(closedWorld.commonElements.instantiation3Class,
+    checkStubs(closedWorld.commonElements.getInstantiationClass(3),
         [r'call$3', r'call$4', r'$signature']);
   });
 }

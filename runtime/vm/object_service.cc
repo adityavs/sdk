@@ -394,7 +394,7 @@ void Field::PrintJSONImpl(JSONStream* stream, bool ref) const {
   } else if (guarded_list_length() == kNoFixedLength) {
     jsobj.AddProperty("_guardLength", "variable");
   } else {
-    jsobj.AddProperty("_guardLength", guarded_list_length());
+    jsobj.AddPropertyF("_guardLength", "%" Pd, guarded_list_length());
   }
   const class Script& script = Script::Handle(Script());
   if (!script.IsNull()) {
@@ -454,11 +454,11 @@ void Script::PrintJSONImpl(JSONStream* stream, bool ref) const {
   }
 
   // Print the line number table
-  if (!source.IsNull()) {
+  const GrowableObjectArray& lineNumberArray =
+      GrowableObjectArray::Handle(GenerateLineNumberArray());
+  if (!lineNumberArray.IsNull()) {
     JSONArray tokenPosTable(&jsobj, "tokenPosTable");
 
-    const GrowableObjectArray& lineNumberArray =
-        GrowableObjectArray::Handle(GenerateLineNumberArray());
     Object& value = Object::Handle();
     intptr_t pos = 0;
 

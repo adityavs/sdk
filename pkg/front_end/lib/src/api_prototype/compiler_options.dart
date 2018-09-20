@@ -4,18 +4,25 @@
 
 library front_end.compiler_options;
 
-import 'package:front_end/src/api_prototype/byte_store.dart';
-import 'package:front_end/src/base/performance_logger.dart';
 import 'package:kernel/target/targets.dart' show Target;
 
+import '../base/performance_logger.dart' show PerformanceLog;
+
 import '../fasta/fasta_codes.dart' show FormattedMessage;
+
 import '../fasta/severity.dart' show Severity;
 
-import 'compilation_message.dart';
-import 'file_system.dart';
-import 'standard_file_system.dart';
+import 'byte_store.dart' show ByteStore, NullByteStore;
+
+import 'compilation_message.dart' show CompilationMessage;
+
+import 'file_system.dart' show FileSystem;
+
+import 'standard_file_system.dart' show StandardFileSystem;
 
 export '../fasta/fasta_codes.dart' show FormattedMessage;
+
+export '../fasta/severity.dart' show Severity;
 
 /// Callback used to report errors encountered during compilation.
 typedef void ErrorHandler(CompilationMessage error);
@@ -212,4 +219,7 @@ class CompilerOptions {
   ///
   /// Typically used by developers to debug internals of the compiler.
   bool throwOnWarningsForDebugging = false;
+
+  /// Whether to generate bytecode.
+  bool bytecode = false;
 }

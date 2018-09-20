@@ -37,8 +37,9 @@ import 'package:front_end/src/fasta/kernel/utils.dart';
 import 'package:front_end/src/fasta/hybrid_file_system.dart';
 import 'package:kernel/kernel.dart' show Component, Procedure;
 import 'package:kernel/target/targets.dart' show TargetFlags;
-import 'package:kernel/target/vm.dart' show VmTarget;
 import 'package:vm/incremental_compiler.dart';
+import 'package:vm/http_filesystem.dart';
+import 'package:vm/target/vm.dart' show VmTarget;
 
 final bool verbose = new bool.fromEnvironment('DFE_VERBOSE');
 const String platformKernelFile = 'virtual_platform_kernel.dill';
@@ -108,7 +109,7 @@ abstract class Compiler {
           case Severity.error:
           case Severity.internalProblem:
             // TODO(sigmund): support emitting code with errors as long as they
-            // are handled in the generated code (issue #30194).
+            // are handled in the generated code.
             printMessage = false; // errors are printed by VM
             errors.add(message.formatted);
             break;
@@ -259,8 +260,8 @@ Future _processExpressionCompilationRequest(request) async {
   final SendPort port = request[1];
   final int isolateId = request[2];
   final String expression = request[3];
-  final List definitions = request[4];
-  final List typeDefinitions = request[5];
+  final List<String> definitions = request[4].cast<String>();
+  final List<String> typeDefinitions = request[5].cast<String>();
   final String libraryUri = request[6];
   final String klass = request[7]; // might be null
   final bool isStatic = request[8];
@@ -305,18 +306,20 @@ void _recordDependencies(
     int isolateId, Component component, String packageConfig) {
   final dependencies = isolateDependencies[isolateId] ??= new List<Uri>();
 
-  for (var lib in component.libraries) {
-    if (lib.importUri.scheme == "dart") continue;
+  if (component != null) {
+    for (var lib in component.libraries) {
+      if (lib.importUri.scheme == "dart") continue;
 
-    dependencies.add(lib.fileUri);
-    for (var part in lib.parts) {
-      final fileUri = lib.fileUri.resolve(part.partUri);
-      if (fileUri.scheme != "" && fileUri.scheme != "file") {
-        // E.g. part 'package:foo/foo.dart';
-        // Maybe the front end should resolve this?
-        continue;
+      dependencies.add(lib.fileUri);
+      for (var part in lib.parts) {
+        final fileUri = lib.fileUri.resolve(part.partUri);
+        if (fileUri.scheme != "" && fileUri.scheme != "file") {
+          // E.g. part 'package:foo/foo.dart';
+          // Maybe the front end should resolve this?
+          continue;
+        }
+        dependencies.add(fileUri);
       }
-      dependencies.add(fileUri);
     }
   }
 
@@ -447,7 +450,7 @@ Future _processLoadRequest(request) async {
     FileSystem fileSystem = _buildFileSystem(
         sourceFiles, platformKernel, multirootFilepaths, multirootScheme);
     compiler = new SingleShotCompilerWrapper(fileSystem, platformKernelPath,
-        requireMain: sourceFiles.isEmpty,
+        requireMain: false,
         strongMode: strong,
         suppressWarnings: suppressWarnings,
         syncAsync: syncAsync,
@@ -461,12 +464,17 @@ Future _processLoadRequest(request) async {
     }
 
     Component component = await compiler.compile(script);
-    _recordDependencies(isolateId, component, packageConfig);
 
     if (compiler.errors.isNotEmpty) {
-      result = new CompilationResult.errors(compiler.errors,
-          serializeComponent(component, filter: (lib) => !lib.isExternal));
+      if (component != null) {
+        result = new CompilationResult.errors(compiler.errors,
+            serializeComponent(component, filter: (lib) => !lib.isExternal));
+      } else {
+        result = new CompilationResult.errors(compiler.errors, null);
+      }
     } else {
+      // Record dependencies only if compilation was error free.
+      _recordDependencies(isolateId, component, packageConfig);
       // We serialize the component excluding vm_platform.dill because the VM has
       // these sources built-in. Everything loaded as a summary in
       // [kernelForProgram] is marked `external`, so we can use that bit to
@@ -507,11 +515,9 @@ Future _processLoadRequest(request) async {
 /// frontend.
 FileSystem _buildFileSystem(List sourceFiles, List<int> platformKernel,
     String multirootFilepaths, String multirootScheme) {
-  FileSystem fileSystem;
+  FileSystem fileSystem = new HttpAwareFileSystem(StandardFileSystem.instance);
 
-  if (sourceFiles.isEmpty && platformKernel == null) {
-    fileSystem = StandardFileSystem.instance;
-  } else {
+  if (!sourceFiles.isEmpty || platformKernel != null) {
     MemoryFileSystem memoryFileSystem =
         new MemoryFileSystem(Uri.parse('file:///'));
     if (sourceFiles != null) {
@@ -526,7 +532,7 @@ FileSystem _buildFileSystem(List sourceFiles, List<int> platformKernel,
           .entityForUri(Uri.parse(platformKernelFile))
           .writeAsBytesSync(platformKernel);
     }
-    fileSystem = new HybridFileSystem(memoryFileSystem);
+    fileSystem = new HybridFileSystem(memoryFileSystem, fileSystem);
   }
 
   if (multirootFilepaths != null) {
@@ -541,9 +547,6 @@ FileSystem _buildFileSystem(List sourceFiles, List<int> platformKernel,
 }
 
 train(String scriptUri, String platformKernelPath) {
-  // TODO(28532): Enable on Windows.
-  if (Platform.isWindows) return;
-
   var tag = kTrainTag;
   var responsePort = new RawReceivePort();
   responsePort.handler = (response) {
@@ -563,11 +566,11 @@ train(String scriptUri, String platformKernelPath) {
     scriptUri,
     platformKernelPath,
     false /* incremental */,
-    false /* strong */,
+    true /* strong */,
     1 /* isolateId chosen randomly */,
     [] /* source files */,
     false /* suppress warnings */,
-    false /* synchronous async */,
+    true /* synchronous async */,
     null /* package_config */,
     null /* multirootFilepaths */,
     null /* multirootScheme */,

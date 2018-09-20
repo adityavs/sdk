@@ -171,7 +171,7 @@ class AstPage extends DiagnosticPageWithNav {
   bool get showInNav => false;
 
   @override
-  Future<Null> generateContent(Map<String, String> params) async {
+  Future<void> generateContent(Map<String, String> params) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     String path = params['file'];
@@ -199,7 +199,7 @@ class AstPage extends DiagnosticPageWithNav {
   }
 
   @override
-  Future<Null> generatePage(Map<String, String> params) async {
+  Future<void> generatePage(Map<String, String> params) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     try {
@@ -324,8 +324,7 @@ class CompletionPage extends DiagnosticPageWithNav {
 
     int fastCount =
         completions.where((c) => c.elapsedInMilliseconds <= 100).length;
-    p('${completions.length} results; ${printPercentage(
-        fastCount / completions.length)} within 100ms.');
+    p('${completions.length} results; ${printPercentage(fastCount / completions.length)} within 100ms.');
 
     // draw a chart
     buf.writeln(
@@ -362,8 +361,7 @@ class CompletionPage extends DiagnosticPageWithNav {
     for (CompletionPerformance completion in completions) {
       String shortName = pathContext.basename(completion.path);
       buf.writeln('<tr>'
-          '<td class="pre right">${printMilliseconds(
-          completion.elapsedInMilliseconds)}</td>'
+          '<td class="pre right">${printMilliseconds(completion.elapsedInMilliseconds)}</td>'
           '<td class="right">${completion.suggestionCount}</td>'
           '<td>${escape(shortName)}</td>'
           '<td><code>${escape(completion.snippet)}</code></td>'
@@ -384,6 +382,11 @@ class ContextsPage extends DiagnosticPageWithNav {
   String describe(AnalysisOptionsImpl options) {
     StringBuffer b = new StringBuffer();
 
+    b.write(writeOption('Strong mode', options.strongMode));
+    b.write(writeOption('Implicit dynamic', options.implicitDynamic));
+    b.write(writeOption('Implicit casts', options.implicitCasts));
+    b.write(writeOption('Declaration casts', options.declarationCasts));
+
     b.write(
         writeOption('Analyze function bodies', options.analyzeFunctionBodies));
     b.write(writeOption('Enable super mixins', options.enableSuperMixins));
@@ -394,7 +397,6 @@ class ContextsPage extends DiagnosticPageWithNav {
         writeOption('Generate errors in SDK files', options.generateSdkErrors));
     b.write(writeOption('Generate hints', options.hint));
     b.write(writeOption('Preserve comments', options.preserveComments));
-    b.write(writeOption('Strong mode', options.strongMode));
     b.write(writeOption('Strong mode hints', options.strongModeHints));
 
     return b.toString();
@@ -488,8 +490,7 @@ class ContextsPage extends DiagnosticPageWithNav {
     implicitFiles.sort();
 
     String lenCounter(List list) {
-      return '<span class="counter" style="float: right;">${list
-          .length}</span>';
+      return '<span class="counter" style="float: right;">${list.length}</span>';
     }
 
     h3('Context files');
@@ -583,7 +584,7 @@ abstract class DiagnosticPage extends Page {
   AnalysisServer get server =>
       (site as DiagnosticsSite).socketServer.analysisServer;
 
-  Future<Null> generateContainer(Map<String, String> params) async {
+  Future<void> generateContainer(Map<String, String> params) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     buf.writeln('<div class="columns docs-layout">');
@@ -599,7 +600,7 @@ abstract class DiagnosticPage extends Page {
     buf.writeln('</div>');
   }
 
-  Future generateContent(Map<String, String> params);
+  Future<void> generateContent(Map<String, String> params);
 
   void generateFooter() {
     buf.writeln('''
@@ -620,9 +621,7 @@ abstract class DiagnosticPage extends Page {
 
       <nav class="masthead-nav">
         <a href="/status" ${isNavPage ? ' class="active"' : ''}>Diagnostics</a>
-        <a href="/feedback" ${isCurrentPage('/feedback')
-        ? ' class="active"'
-        : ''}>Feedback</a>
+        <a href="/feedback" ${isCurrentPage('/feedback') ? ' class="active"' : ''}>Feedback</a>
         <a href="https://www.dartlang.org/tools/analyzer" target="_blank">Docs</a>
         <a href="https://htmlpreview.github.io/?https://github.com/dart-lang/sdk/blob/master/pkg/analysis_server/doc/api.html" target="_blank">Spec</a>
       </nav>
@@ -631,7 +630,7 @@ abstract class DiagnosticPage extends Page {
 ''');
   }
 
-  Future<Null> generatePage(Map<String, String> params) async {
+  Future<void> generatePage(Map<String, String> params) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     buf.writeln('<!DOCTYPE html><html lang="en">');
@@ -671,7 +670,7 @@ abstract class DiagnosticPageWithNav extends DiagnosticPage {
 
   bool get showInNav => true;
 
-  Future<Null> generateContainer(Map<String, String> params) async {
+  Future<void> generateContainer(Map<String, String> params) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     buf.writeln('<div class="columns docs-layout">');
@@ -769,7 +768,7 @@ class ElementModelPage extends DiagnosticPageWithNav {
   bool get showInNav => false;
 
   @override
-  Future<Null> generateContent(Map<String, String> params) async {
+  Future<void> generateContent(Map<String, String> params) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     String path = params['file'];
@@ -793,11 +792,11 @@ class ElementModelPage extends DiagnosticPageWithNav {
     }
 
     ElementWriter writer = new ElementWriter(buf);
-    result.unit.element.accept(writer);
+    result.unit.declaredElement.accept(writer);
   }
 
   @override
-  Future<Null> generatePage(Map<String, String> params) async {
+  Future<void> generatePage(Map<String, String> params) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     try {
@@ -902,12 +901,9 @@ class FeedbackPage extends DiagnosticPage {
 
     p('Other data to include:');
     ul([
-      "the IDE you are using and it's version${ideText.isEmpty
-          ? ''
-          : ' ($ideText)'}",
+      "the IDE you are using and it's version${ideText.isEmpty ? '' : ' ($ideText)'}",
       'the Dart SDK version (<code>${escape(_sdkVersion)}</code>)',
-      'your operating system (<code>${escape(
-          Platform.operatingSystem)}</code>)',
+      'your operating system (<code>${escape(Platform.operatingSystem)}</code>)',
     ], (line) => buf.writeln(line));
 
     p('Thanks!');
@@ -1067,8 +1063,7 @@ class OverlaysPage extends DiagnosticPageWithNav {
       blankslate('No overlays.');
     } else {
       String lenCounter(List list) {
-        return '<span class="counter" style="float: right;">${list
-            .length}</span>';
+        return '<span class="counter" style="float: right;">${list.length}</span>';
       }
 
       h3('Overlays ${lenCounter(paths)}', raw: true);
@@ -1250,7 +1245,7 @@ class ServiceProtocol {
   final WebSocket socket;
 
   int _id = 0;
-  Map<String, Completer> _completers = {};
+  Map<String, Completer<Map>> _completers = {};
 
   ServiceProtocol._(this.socket) {
     socket.listen(_handleMessage);
@@ -1258,7 +1253,7 @@ class ServiceProtocol {
 
   Future<Map> call(String method, [Map args]) {
     String id = '${++_id}';
-    Completer completer = new Completer();
+    Completer<Map> completer = new Completer();
     _completers[id] = completer;
     Map m = {'id': id, 'method': method};
     if (args != null) m['params'] = args;
@@ -1287,8 +1282,6 @@ class ServiceProtocol {
   }
 
   static Future<ServiceProtocol> connect(Uri uri) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
     WebSocket socket = await WebSocket.connect(uri.toString());
     return new ServiceProtocol._(socket);
   }
@@ -1310,10 +1303,8 @@ class StatusPage extends DiagnosticPageWithNav {
 
     buf.writeln('<div class="column one-half">');
     h3('Status');
-    buf.writeln(writeOption('Preview-dart-2',
-        diagnosticsSite.socketServer.analysisServerOptions.previewDart2));
-    buf.writeln(writeOption('Use common front end',
-        diagnosticsSite.socketServer.analysisServerOptions.useCFE));
+    buf.writeln(writeOption('Use fasta parser',
+        diagnosticsSite.socketServer.analysisServerOptions.useFastaParser));
     buf.writeln(writeOption('Instrumentation enabled',
         AnalysisEngine.instance.instrumentationService.isActive));
     buf.writeln(writeOption('Server process ID', pid));

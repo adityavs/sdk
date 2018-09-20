@@ -12,10 +12,9 @@ import 'package:kernel/ast.dart'
         Block,
         CanonicalName,
         Class,
+        Component,
         Constructor,
         DartType,
-        Procedure,
-        DynamicType,
         EmptyStatement,
         Expression,
         ExpressionStatement,
@@ -29,8 +28,9 @@ import 'package:kernel/ast.dart'
         Name,
         NamedExpression,
         NullLiteral,
+        Procedure,
         ProcedureKind,
-        Component,
+        RedirectingInitializer,
         Source,
         Statement,
         StringLiteral,
@@ -58,7 +58,11 @@ import '../messages.dart'
         LocatedMessage,
         messageConstConstructorNonFinalField,
         messageConstConstructorNonFinalFieldCause,
+        messageConstConstructorRedirectionToNonConst,
         noLength,
+        templateFinalFieldNotInitialized,
+        templateFinalFieldNotInitializedByConstructor,
+        templateMissingImplementationCause,
         templateSuperclassHasNoDefaultConstructor;
 
 import '../problems.dart' show unhandled;
@@ -79,11 +83,11 @@ import 'kernel_builder.dart'
         Declaration,
         InvalidTypeBuilder,
         KernelClassBuilder,
+        KernelFieldBuilder,
         KernelLibraryBuilder,
         KernelNamedTypeBuilder,
         KernelProcedureBuilder,
         LibraryBuilder,
-        MemberBuilder,
         NamedTypeBuilder,
         TypeBuilder,
         TypeDeclarationBuilder,
@@ -146,7 +150,7 @@ class KernelTarget extends TargetImplementation {
   }
 
   void read(Uri uri) {
-    loader.read(uri, -1);
+    loader.read(uri, -1, accessor: loader.first);
   }
 
   @override
@@ -233,7 +237,7 @@ class KernelTarget extends TargetImplementation {
         () async {
           loader.createTypeInferenceEngine();
           await loader.buildOutlines();
-          loader.coreLibrary.becomeCoreLibrary(const DynamicType());
+          loader.coreLibrary.becomeCoreLibrary();
           dynamicType.bind(loader.coreLibrary["dynamic"]);
           loader.resolveParts();
           loader.computeLibraryScopes();
@@ -254,8 +258,10 @@ class KernelTarget extends TargetImplementation {
           computeCoreTypes();
           loader.computeHierarchy();
           loader.performTopLevelInference(myClasses);
+          loader.checkSupertypes(myClasses);
           loader.checkOverrides(myClasses);
           loader.checkAbstractMembers(myClasses);
+          loader.checkRedirectingFactories(myClasses);
           loader.addNoSuchMethodForwarders(myClasses);
           return component;
         },
@@ -288,10 +294,11 @@ class KernelTarget extends TargetImplementation {
           ticker.logMs("Building component");
           await loader.buildBodies();
           loader.finishDeferredLoadTearoffs();
+          loader.finishNoSuchMethodForwarders();
           List<SourceClassBuilder> myClasses = collectMyClasses();
-          finishAllConstructors(myClasses);
           loader.finishNativeMethods();
           loader.finishPatchMethods();
+          finishAllConstructors(myClasses);
           runBuildTransformations();
 
           if (verify) this.verify();
@@ -389,8 +396,11 @@ class KernelTarget extends TargetImplementation {
     this.uriToSource.forEach(copySource);
     dillTarget.loader.uriToSource.forEach(copySource);
 
-    Component component = new Component(
-        nameRoot: nameRoot, libraries: libraries, uriToSource: uriToSource);
+    Component component = CompilerContext.current.options.target
+        .configureComponent(new Component(
+            nameRoot: nameRoot,
+            libraries: libraries,
+            uriToSource: uriToSource));
     if (loader.first != null) {
       // TODO(sigmund): do only for full program
       Declaration declaration =
@@ -456,7 +466,12 @@ class KernelTarget extends TargetImplementation {
   /// If [builder] doesn't have a constructors, install the defaults.
   void installDefaultConstructor(SourceClassBuilder builder) {
     if (builder.isMixinApplication && !builder.isNamedMixinApplication) return;
-    if (builder.constructors.local.isNotEmpty) return;
+    // TODO(askesc): Make this check light-weight in the absence of patches.
+    if (builder.target.constructors.isNotEmpty) return;
+    if (builder.target.redirectingFactoryConstructors.isNotEmpty) return;
+    for (Procedure proc in builder.target.procedures) {
+      if (proc.isFactory) return;
+    }
     if (builder.isPatch) return;
 
     /// Quotes below are from [Dart Programming Language Specification, 4th
@@ -598,7 +613,8 @@ class KernelTarget extends TargetImplementation {
         libraries.add(library.target);
       }
     }
-    Component plaformLibraries = new Component();
+    Component plaformLibraries = CompilerContext.current.options.target
+        .configureComponent(new Component());
     // Add libraries directly to prevent that their parents are changed.
     plaformLibraries.libraries.addAll(libraries);
     loader.computeCoreTypes(plaformLibraries);
@@ -633,14 +649,22 @@ class KernelTarget extends TargetImplementation {
         uninitializedFields.add(field);
       }
     }
-    Map<Constructor, List<FieldInitializer>> fieldInitializers =
-        <Constructor, List<FieldInitializer>>{};
+    Map<Constructor, Set<Field>> constructorInitializedFields =
+        <Constructor, Set<Field>>{};
     Constructor superTarget;
-    builder.constructors.forEach((String name, Declaration member) {
-      if (member.isFactory) return;
-      MemberBuilder constructorBuilder = member;
-      Constructor constructor = constructorBuilder.target;
-      if (!constructorBuilder.isRedirectingGenerativeConstructor) {
+    for (Constructor constructor in cls.constructors) {
+      bool isRedirecting = false;
+      for (Initializer initializer in constructor.initializers) {
+        if (initializer is RedirectingInitializer) {
+          if (constructor.isConst && !initializer.target.isConst) {
+            builder.addProblem(messageConstConstructorRedirectionToNonConst,
+                initializer.fileOffset, initializer.target.name.name.length);
+          }
+          isRedirecting = true;
+          break;
+        }
+      }
+      if (!isRedirecting) {
         /// >If no superinitializer is provided, an implicit superinitializer
         /// >of the form super() is added at the end of k’s initializer list,
         /// >unless the enclosing class is class Object.
@@ -648,7 +672,7 @@ class KernelTarget extends TargetImplementation {
           superTarget ??= defaultSuperConstructor(cls);
           Initializer initializer;
           if (superTarget == null) {
-            builder.addCompileTimeError(
+            builder.addProblem(
                 templateSuperclassHasNoDefaultConstructor
                     .withArguments(cls.superclass.name),
                 constructor.fileOffset,
@@ -669,15 +693,26 @@ class KernelTarget extends TargetImplementation {
           constructor.function.body = new EmptyStatement();
           constructor.function.body.parent = constructor.function;
         }
-        List<FieldInitializer> myFieldInitializers = <FieldInitializer>[];
+
+        Set<Field> myInitializedFields = new Set<Field>();
         for (Initializer initializer in constructor.initializers) {
           if (initializer is FieldInitializer) {
-            myFieldInitializers.add(initializer);
+            myInitializedFields.add(initializer.field);
           }
         }
-        fieldInitializers[constructor] = myFieldInitializers;
+        for (VariableDeclaration formal
+            in constructor.function.positionalParameters) {
+          if (formal.isFieldFormal) {
+            Declaration fieldBuilder = builder.scope.local[formal.name] ??
+                builder.origin.scope.local[formal.name];
+            if (fieldBuilder is KernelFieldBuilder) {
+              myInitializedFields.add(fieldBuilder.field);
+            }
+          }
+        }
+        constructorInitializedFields[constructor] = myInitializedFields;
         if (constructor.isConst && nonFinalFields.isNotEmpty) {
-          builder.addCompileTimeError(messageConstConstructorNonFinalField,
+          builder.addProblem(messageConstConstructorNonFinalField,
               constructor.fileOffset, noLength,
               context: nonFinalFields
                   .map((field) => messageConstConstructorNonFinalFieldCause
@@ -686,36 +721,57 @@ class KernelTarget extends TargetImplementation {
           nonFinalFields.clear();
         }
       }
-    });
+    }
     Set<Field> initializedFields;
-    fieldInitializers.forEach(
-        (Constructor constructor, List<FieldInitializer> initializers) {
-      Iterable<Field> fields = initializers.map((i) => i.field);
+    constructorInitializedFields
+        .forEach((Constructor constructor, Set<Field> fields) {
       if (initializedFields == null) {
         initializedFields = new Set<Field>.from(fields);
       } else {
         initializedFields.addAll(fields);
       }
     });
+
     // Run through all fields that aren't initialized by any constructor, and
     // set their initializer to `null`.
     for (Field field in uninitializedFields) {
       if (initializedFields == null || !initializedFields.contains(field)) {
         field.initializer = new NullLiteral()..parent = field;
+        if (field.isFinal && cls.constructors.isNotEmpty) {
+          builder.library.addProblem(
+              templateFinalFieldNotInitialized.withArguments(field.name.name),
+              field.fileOffset,
+              field.name.name.length,
+              field.fileUri);
+        }
       }
     }
+
     // Run through all fields that are initialized by some constructor, and
     // make sure that all other constructors also initialize them.
-    fieldInitializers.forEach(
-        (Constructor constructor, List<FieldInitializer> initializers) {
-      Iterable<Field> fields = initializers.map((i) => i.field);
-      for (Field field in initializedFields.difference(fields.toSet())) {
+    constructorInitializedFields
+        .forEach((Constructor constructor, Set<Field> fields) {
+      for (Field field in initializedFields.difference(fields)) {
         if (field.initializer == null) {
           FieldInitializer initializer =
               new FieldInitializer(field, new NullLiteral())
                 ..isSynthetic = true;
           initializer.parent = constructor;
           constructor.initializers.insert(0, initializer);
+          if (field.isFinal) {
+            builder.library.addProblem(
+                templateFinalFieldNotInitializedByConstructor
+                    .withArguments(field.name.name),
+                constructor.fileOffset,
+                constructor.name.name.length,
+                constructor.fileUri,
+                context: [
+                  templateMissingImplementationCause
+                      .withArguments(field.name.name)
+                      .withLocation(field.fileUri, field.fileOffset,
+                          field.name.name.length)
+                ]);
+          }
         }
       }
     });
@@ -725,7 +781,7 @@ class KernelTarget extends TargetImplementation {
   /// libraries for the first time.
   void runBuildTransformations() {
     backendTarget.performModularTransformationsOnLibraries(
-        loader.coreTypes, loader.hierarchy, loader.libraries,
+        component, loader.coreTypes, loader.hierarchy, loader.libraries,
         logger: (String msg) => ticker.logMs(msg));
   }
 
@@ -754,13 +810,13 @@ class KernelTarget extends TargetImplementation {
       KernelLibraryBuilder first;
       for (Uri patch in patches) {
         if (first == null) {
-          first =
-              library.loader.read(patch, -1, fileUri: patch, origin: library);
+          first = library.loader.read(patch, -1,
+              fileUri: patch, origin: library, accessor: library);
         } else {
           // If there's more than one patch file, it's interpreted as a part of
           // the patch library.
           KernelLibraryBuilder part =
-              library.loader.read(patch, -1, fileUri: patch);
+              library.loader.read(patch, -1, fileUri: patch, accessor: first);
           first.parts.add(part);
           part.addPartOf(null, null, "${first.uri}", -1);
         }

@@ -9,6 +9,7 @@ library dart2js.source_information.kernel;
 
 import 'package:kernel/ast.dart' as ir;
 import '../elements/entities.dart';
+import '../js_model/element_map.dart';
 import '../kernel/element_map.dart';
 import '../js_model/js_strategy.dart';
 import '../universe/call_structure.dart';
@@ -16,14 +17,13 @@ import 'source_information.dart';
 import 'position_information.dart';
 
 class KernelSourceInformationStrategy
-    extends AbstractPositionSourceInformationStrategy<ir.Node> {
+    extends AbstractPositionSourceInformationStrategy {
   final JsBackendStrategy _backendStrategy;
 
   const KernelSourceInformationStrategy(this._backendStrategy);
 
   @override
-  SourceInformationBuilder<ir.Node> createBuilderForContext(
-      MemberEntity member) {
+  SourceInformationBuilder createBuilderForContext(MemberEntity member) {
     return new KernelSourceInformationBuilder(
         _backendStrategy.elementMap, member);
   }
@@ -36,7 +36,7 @@ class KernelSourceInformationStrategy
 // TODO(johnniwinther): Make the closure call names available to
 // `sourcemap_helper.dart`.
 String computeKernelElementNameForSourceMaps(
-    KernelToElementMapForBuilding elementMap, MemberEntity member,
+    JsToElementMap elementMap, MemberEntity member,
     [CallStructure callStructure]) {
   MemberDefinition definition = elementMap.getMemberDefinition(member);
   switch (definition.kind) {
@@ -70,15 +70,24 @@ String computeKernelElementNameForSourceMaps(
 
 /// [SourceInformationBuilder] that generates [PositionSourceInformation] from
 /// Kernel nodes.
-class KernelSourceInformationBuilder
-    implements SourceInformationBuilder<ir.Node> {
-  final KernelToElementMapForBuilding _elementMap;
+class KernelSourceInformationBuilder implements SourceInformationBuilder {
+  final JsToElementMap _elementMap;
   final MemberEntity _member;
   final String _name;
 
+  /// Inlining context or null when no inlining has taken place.
+  ///
+  /// A new builder is created every time the backend inlines a method. This
+  /// field contains the location of every call site that has been inlined. The
+  /// last entry on the list is always a call to [_member].
+  final List<FrameContext> inliningContext;
+
   KernelSourceInformationBuilder(this._elementMap, this._member)
-      : this._name =
-            computeKernelElementNameForSourceMaps(_elementMap, _member);
+      : _name = computeKernelElementNameForSourceMaps(_elementMap, _member),
+        inliningContext = null;
+
+  KernelSourceInformationBuilder.withContext(
+      this._elementMap, this._member, this.inliningContext, this._name);
 
   /// Returns the [SourceLocation] for the [offset] within [node] using [name]
   /// as the name of the source location.
@@ -108,8 +117,10 @@ class KernelSourceInformationBuilder
   SourceInformation _buildFunction(
       String name, ir.TreeNode node, ir.FunctionNode functionNode) {
     if (functionNode.fileEndOffset != ir.TreeNode.noOffset) {
-      return new PositionSourceInformation(_getSourceLocation(name, node),
-          _getSourceLocation(name, functionNode, functionNode.fileEndOffset));
+      return new PositionSourceInformation(
+          _getSourceLocation(name, node),
+          _getSourceLocation(name, functionNode, functionNode.fileEndOffset),
+          this.inliningContext);
     }
     return _buildTreeNode(node);
   }
@@ -158,7 +169,9 @@ class KernelSourceInformationBuilder
       ir.TreeNode node, ir.FunctionNode functionNode) {
     if (functionNode.fileEndOffset != ir.TreeNode.noOffset) {
       return new PositionSourceInformation(
-          _getSourceLocation(_name, functionNode, functionNode.fileEndOffset));
+          _getSourceLocation(_name, functionNode, functionNode.fileEndOffset),
+          null,
+          this.inliningContext);
     }
     return _buildTreeNode(node);
   }
@@ -178,7 +191,7 @@ class KernelSourceInformationBuilder
     } else {
       location = _getSourceLocation(_name, node);
     }
-    return new PositionSourceInformation(location);
+    return new PositionSourceInformation(location, null, inliningContext);
   }
 
   /// Creates source information for the body of the current member.
@@ -261,12 +274,27 @@ class KernelSourceInformationBuilder
   SourceInformation _buildTreeNode(ir.TreeNode node,
       {SourceLocation closingPosition, String name}) {
     return new PositionSourceInformation(
-        _getSourceLocation(name ?? _name, node), closingPosition);
+        _getSourceLocation(name ?? _name, node),
+        closingPosition,
+        inliningContext);
   }
 
   @override
-  SourceInformationBuilder forContext(MemberEntity member) =>
-      new KernelSourceInformationBuilder(_elementMap, member);
+  SourceInformationBuilder forContext(
+      MemberEntity member, SourceInformation context) {
+    List<FrameContext> newContext = inliningContext?.toList() ?? [];
+    if (context != null) {
+      newContext.add(new FrameContext(context, member.name));
+    } else {
+      // TODO(sigmund): investigate whether we have any more cases where context
+      // is null.
+      newContext = inliningContext;
+    }
+
+    String name = computeKernelElementNameForSourceMaps(_elementMap, _member);
+    return new KernelSourceInformationBuilder.withContext(
+        _elementMap, member, newContext, name);
+  }
 
   @override
   SourceInformation buildSwitchCase(ir.Node node) => null;
@@ -374,6 +402,11 @@ class KernelSourceInformationBuilder
   }
 
   @override
+  SourceInformation buildAssert(ir.Node node) {
+    return _buildTreeNode(node);
+  }
+
+  @override
   SourceInformation buildNew(ir.Node node) {
     return _buildTreeNode(node);
   }
@@ -386,12 +419,17 @@ class KernelSourceInformationBuilder
   @override
   SourceInformation buildCall(
       covariant ir.TreeNode receiver, covariant ir.TreeNode call) {
-    return new PositionSourceInformation(
-        _getSourceLocation(_name, receiver), _getSourceLocation(_name, call));
+    return new PositionSourceInformation(_getSourceLocation(_name, receiver),
+        _getSourceLocation(_name, call), inliningContext);
   }
 
   @override
   SourceInformation buildGet(ir.Node node) {
+    return _buildTreeNode(node);
+  }
+
+  @override
+  SourceInformation buildSet(ir.Node node) {
     return _buildTreeNode(node);
   }
 
@@ -450,4 +488,9 @@ class KernelSourceLocation extends AbstractSourceLocation {
   KernelSourceLocation(ir.Location location, this.offset, this.sourceName)
       : sourceUri = location.file,
         super.fromLocation(location);
+
+  KernelSourceLocation.fromOther(KernelSourceLocation other, this.sourceName)
+      : sourceUri = other.sourceUri,
+        offset = other.offset,
+        super.fromOther(other);
 }

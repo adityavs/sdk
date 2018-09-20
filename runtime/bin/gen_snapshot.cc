@@ -86,46 +86,12 @@ static char* app_script_name = NULL;
 static CommandLineOptions* entry_points_files = NULL;
 
 // The environment provided through the command line using -D options.
-static dart::HashMap* environment = NULL;
-
-static void* GetHashmapKeyFromString(char* key) {
-  return reinterpret_cast<void*>(key);
-}
+static dart::SimpleHashMap* environment = NULL;
 
 static bool ProcessEnvironmentOption(const char* arg,
                                      CommandLineOptions* vm_options) {
   return OptionProcessor::ProcessEnvironmentOption(arg, vm_options,
                                                    &environment);
-}
-
-static Dart_Handle EnvironmentCallback(Dart_Handle name) {
-  uint8_t* utf8_array;
-  intptr_t utf8_len;
-  Dart_Handle result = Dart_Null();
-  Dart_Handle handle = Dart_StringToUTF8(name, &utf8_array, &utf8_len);
-  if (Dart_IsError(handle)) {
-    handle = Dart_ThrowException(
-        DartUtils::NewDartArgumentError(Dart_GetError(handle)));
-  } else {
-    char* name_chars = reinterpret_cast<char*>(malloc(utf8_len + 1));
-    memmove(name_chars, utf8_array, utf8_len);
-    name_chars[utf8_len] = '\0';
-    const char* value = NULL;
-    if (environment != NULL) {
-      HashMap::Entry* entry =
-          environment->Lookup(GetHashmapKeyFromString(name_chars),
-                              HashMap::StringHash(name_chars), false);
-      if (entry != NULL) {
-        value = reinterpret_cast<char*>(entry->value);
-      }
-    }
-    if (value != NULL) {
-      result = Dart_NewStringFromUTF8(reinterpret_cast<const uint8_t*>(value),
-                                      strlen(value));
-    }
-    free(name_chars);
-  }
-  return result;
 }
 
 static const char* kSnapshotKindNames[] = {
@@ -154,8 +120,6 @@ static const char* kSnapshotKindNames[] = {
   V(save_obfuscation_map, obfuscation_map_filename)
 
 #define BOOL_OPTIONS_LIST(V)                                                   \
-  V(dependencies_only, dependencies_only)                                      \
-  V(print_dependencies, print_dependencies)                                    \
   V(obfuscate, obfuscate)                                                      \
   V(verbose, verbose)                                                          \
   V(version, version)                                                          \
@@ -206,10 +170,6 @@ static void PrintUsage() {
 "--dependencies=<output-file>                                                \n"
 "  Generates a Makefile with snapshot output files as targets and all        \n"
 "  transitive imports as sources.                                            \n"
-"--print_dependencies                                                        \n"
-"  Prints all transitive imports to stdout.                                  \n"
-"--dependencies_only                                                         \n"
-"  Don't create and output the snapshot.                                     \n"
 "--help                                                                      \n"
 "  Display this message (add --verbose for information about all VM options).\n"
 "--version                                                                   \n"
@@ -705,38 +665,16 @@ static void CreateAndWriteDependenciesFile() {
 
   Loader::ResolveDependenciesAsFilePaths();
 
-  ASSERT((dependencies_filename != NULL) || print_dependencies);
+  ASSERT(dependencies_filename != NULL);
   if (dependencies_filename != NULL) {
     DependenciesFileWriter writer;
     writer.WriteDependencies(dependencies);
   }
 
-  if (print_dependencies) {
-    Log::Print("%s\n", vm_snapshot_data_filename);
-    if (snapshot_kind == kScript) {
-      if (vm_snapshot_data_filename != NULL) {
-        Log::Print("%s\n", vm_snapshot_data_filename);
-      }
-      if (vm_snapshot_instructions_filename != NULL) {
-        Log::Print("%s\n", vm_snapshot_instructions_filename);
-      }
-      if (isolate_snapshot_data_filename != NULL) {
-        Log::Print("%s\n", isolate_snapshot_data_filename);
-      }
-      if (isolate_snapshot_instructions_filename != NULL) {
-        Log::Print("%s\n", isolate_snapshot_instructions_filename);
-      }
-    }
-    for (intptr_t i = 0; i < dependencies->length(); i++) {
-      Log::Print("%s\n", dependencies->At(i));
-    }
-  }
-
   for (intptr_t i = 0; i < dependencies->length(); i++) {
     free(dependencies->At(i));
   }
-  delete dependencies;
-  isolate_data->set_dependencies(NULL);
+  dependencies->Clear();
 }
 
 static Dart_Handle CreateSnapshotLibraryTagHandler(Dart_LibraryTag tag,
@@ -1092,10 +1030,8 @@ static Dart_QualifiedFunctionName* ParseEntryPointsManifestFiles() {
     int64_t entries = ParseEntryPointsManifestLines(file, NULL);
     fclose(file);
 
-    if (entries <= 0) {
-      Log::PrintErr(
-          "Manifest file `%s` specified is invalid or contained no entries\n",
-          path);
+    if (entries < 0) {
+      Log::PrintErr("Manifest file `%s` specified is invalid\n", path);
       return NULL;
     }
 
@@ -1423,7 +1359,7 @@ static int GenerateSnapshotFromKernel(const uint8_t* kernel_buffer,
   char* error = NULL;
   IsolateData* isolate_data = new IsolateData(NULL, commandline_package_root,
                                               commandline_packages_file, NULL);
-  if ((dependencies_filename != NULL) || print_dependencies) {
+  if (dependencies_filename != NULL) {
     isolate_data->set_dependencies(new MallocGrowableArray<char*>());
   }
 
@@ -1451,24 +1387,32 @@ static int GenerateSnapshotFromKernel(const uint8_t* kernel_buffer,
   }
 
   Dart_EnterScope();
-  Dart_Handle result = Dart_SetEnvironmentCallback(EnvironmentCallback);
+  Dart_Handle result =
+      Dart_SetEnvironmentCallback(DartUtils::EnvironmentCallback);
+  CHECK_RESULT(result);
+
+  // The root library has to be set to generate AOT snapshots, and sometimes we
+  // set one for the core snapshot too.
+  // If the input dill file has a root library, then Dart_LoadScript will
+  // ignore this dummy uri and set the root library to the one reported in
+  // the dill file. Since dill files are not dart script files,
+  // trying to resolve the root library URI based on the dill file name
+  // would not help.
+  //
+  // If the input dill file does not have a root library, then
+  // Dart_LoadScript will error.
+  //
+  // TODO(kernel): Dart_CreateIsolateFromKernel should respect the root library
+  // in the kernel file, though this requires auditing the other loading paths
+  // in the embedders that had to work around this.
+  result = Dart_SetRootLibrary(
+      Dart_LoadLibraryFromKernel(kernel_buffer, kernel_buffer_size));
   CHECK_RESULT(result);
 
   switch (snapshot_kind) {
     case kAppAOTBlobs:
     case kAppAOTAssembly: {
-      // The root library has to be set to generate AOT snapshots.
-      // If the input dill file has a root library, then Dart_LoadScript will
-      // ignore this dummy uri and set the root library to the one reported in
-      // the dill file. Since dill files are not dart script files,
-      // trying to resolve the root library URI based on the dill file name
-      // would not help.
-      //
-      // If the input dill file does not have a root library, then
-      // Dart_LoadScript will error.
-      Dart_Handle library =
-          Dart_LoadScriptFromKernel(kernel_buffer, kernel_buffer_size);
-      if (Dart_IsError(library)) {
+      if (Dart_IsNull(Dart_RootLibrary())) {
         Log::PrintErr(
             "Unable to load root library from the input dill file.\n");
         return kErrorExitCode;
@@ -1531,6 +1475,7 @@ int main(int argc, char** argv) {
     PrintUsage();
     return kErrorExitCode;
   }
+  DartUtils::SetEnvironment(environment);
 
   // Sniff the script to check if it is actually a dill file.
   uint8_t* kernel_buffer = NULL;
@@ -1546,8 +1491,7 @@ int main(int argc, char** argv) {
           "Can only generate core or aot snapshots from a kernel file.\n");
       return kErrorExitCode;
     }
-    if ((dependencies_filename != NULL) || print_dependencies ||
-        dependencies_only) {
+    if (dependencies_filename != NULL) {
       Log::PrintErr("Depfiles are not supported in Dart 2.\n");
       return kErrorExitCode;
     }
@@ -1678,7 +1622,7 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  result = Dart_SetEnvironmentCallback(EnvironmentCallback);
+  result = Dart_SetEnvironmentCallback(DartUtils::EnvironmentCallback);
   CHECK_RESULT(result);
 
   // Load up the script before a snapshot is created.
@@ -1712,7 +1656,7 @@ int main(int argc, char** argv) {
     // be in the snapshot.
     isolate_data = new IsolateData(app_script_name, commandline_package_root,
                                    commandline_packages_file, NULL);
-    if ((dependencies_filename != NULL) || print_dependencies) {
+    if (dependencies_filename != NULL) {
       isolate_data->set_dependencies(new MallocGrowableArray<char*>());
     }
 
@@ -1731,7 +1675,7 @@ int main(int argc, char** argv) {
       exit(kErrorExitCode);
     }
     Dart_EnterScope();
-    result = Dart_SetEnvironmentCallback(EnvironmentCallback);
+    result = Dart_SetEnvironmentCallback(DartUtils::EnvironmentCallback);
     CHECK_RESULT(result);
 
     // Set up the library tag handler in such a manner that it will use the
@@ -1762,24 +1706,22 @@ int main(int argc, char** argv) {
 
     LoadCompilationTrace();
 
-    if (!dependencies_only) {
-      switch (snapshot_kind) {
-        case kCore:
-          CreateAndWriteCoreSnapshot();
-          break;
-        case kCoreJIT:
-          CreateAndWriteCoreJITSnapshot();
-          break;
-        case kScript:
-          CreateAndWriteScriptSnapshot();
-          break;
-        case kAppAOTBlobs:
-        case kAppAOTAssembly:
-          CreateAndWritePrecompiledSnapshot(entry_points);
-          break;
-        default:
-          UNREACHABLE();
-      }
+    switch (snapshot_kind) {
+      case kCore:
+        CreateAndWriteCoreSnapshot();
+        break;
+      case kCoreJIT:
+        CreateAndWriteCoreJITSnapshot();
+        break;
+      case kScript:
+        CreateAndWriteScriptSnapshot();
+        break;
+      case kAppAOTBlobs:
+      case kAppAOTAssembly:
+        CreateAndWritePrecompiledSnapshot(entry_points);
+        break;
+      default:
+        UNREACHABLE();
     }
 
     CreateAndWriteDependenciesFile();

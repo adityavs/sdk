@@ -26,7 +26,8 @@ class SnapshotWriter;
   V(JumpToFrame)                                                               \
   V(RunExceptionHandler)                                                       \
   V(DeoptForRewind)                                                            \
-  V(UpdateStoreBuffer)                                                         \
+  V(WriteBarrier)                                                              \
+  V(WriteBarrierWrappers)                                                      \
   V(PrintStopMessage)                                                          \
   V(AllocateArray)                                                             \
   V(AllocateContext)                                                           \
@@ -69,6 +70,7 @@ class SnapshotWriter;
   V(Subtype1TestCache)                                                         \
   V(Subtype2TestCache)                                                         \
   V(Subtype4TestCache)                                                         \
+  V(Subtype6TestCache)                                                         \
   V(DefaultTypeTest)                                                           \
   V(TopTypeTypeTest)                                                           \
   V(TypeRefTypeTest)                                                           \
@@ -81,7 +83,9 @@ class SnapshotWriter;
   V(NullErrorSharedWithFPURegs)                                                \
   V(NullErrorSharedWithoutFPURegs)                                             \
   V(StackOverflowSharedWithFPURegs)                                            \
-  V(StackOverflowSharedWithoutFPURegs)
+  V(StackOverflowSharedWithoutFPURegs)                                         \
+  V(OneArgCheckInlineCacheWithExactnessCheck)                                  \
+  V(OneArgOptimizedCheckInlineCacheWithExactnessCheck)
 
 #else
 #define VM_STUB_CODE_LIST(V)                                                   \
@@ -101,7 +105,9 @@ class SnapshotWriter;
   V(SlowTypeTest)                                                              \
   V(LazySpecializeTypeTest)                                                    \
   V(FrameAwaitingMaterialization)                                              \
-  V(AsynchronousGapMarker)
+  V(AsynchronousGapMarker)                                                     \
+  V(InvokeDartCodeFromBytecode)                                                \
+  V(InterpretCall)
 
 #endif  // !defined(TARGET_ARCH_DBC)
 
@@ -120,7 +126,7 @@ class StubEntry {
 
   const ExternalLabel& label() const { return label_; }
   uword EntryPoint() const { return entry_point_; }
-  uword CheckedEntryPoint() const { return checked_entry_point_; }
+  uword MonomorphicEntryPoint() const { return monomorphic_entry_point_; }
   RawCode* code() const { return code_; }
   intptr_t Size() const { return size_; }
 
@@ -130,7 +136,7 @@ class StubEntry {
  private:
   RawCode* code_;
   uword entry_point_;
-  uword checked_entry_point_;
+  uword monomorphic_entry_point_;
   intptr_t size_;
   ExternalLabel label_;
 
@@ -218,7 +224,8 @@ class StubCode : public AllStatic {
       intptr_t num_args,
       const RuntimeEntry& handle_ic_miss,
       Token::Kind kind,
-      bool optimized = false);
+      bool optimized = false,
+      bool exactness_check = false);
   static void GenerateUsageCounterIncrement(Assembler* assembler,
                                             Register temp_reg);
   static void GenerateOptimizedUsageCounterIncrement(Assembler* assembler);

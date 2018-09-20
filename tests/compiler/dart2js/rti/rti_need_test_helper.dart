@@ -11,9 +11,11 @@ import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/diagnostics/diagnostic_listener.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/elements/types.dart';
+import 'package:compiler/src/ir/util.dart';
 import 'package:compiler/src/js_backend/runtime_types.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
+import 'package:compiler/src/js_model/element_map.dart';
 import 'package:compiler/src/kernel/element_map.dart';
-import 'package:compiler/src/kernel/kernel_backend_strategy.dart';
 import 'package:compiler/src/kernel/kernel_strategy.dart';
 import 'package:compiler/src/universe/feature.dart';
 import 'package:compiler/src/universe/selector.dart';
@@ -28,21 +30,10 @@ main(List<String> args) {
 }
 
 runTests(List<String> args, [int shardIndex]) {
-  cacheRtiDataForTesting = true;
   asyncTest(() async {
     Directory dataDir = new Directory.fromUri(Platform.script.resolve('data'));
-    await checkTests(dataDir, computeKernelRtiMemberNeed,
-        computeClassDataFromKernel: computeKernelRtiClassNeed,
+    await checkTests(dataDir, const RtiNeedDataComputer(),
         options: [],
-        skipForKernel: [
-          'runtime_type_closure_equals2.dart',
-        ],
-        skipForStrong: [
-          'map_literal_checked.dart',
-          // TODO(johnniwinther): Optimize local function type signature need.
-          'subtype_named_args.dart',
-          'subtype_named_args1.dart',
-        ],
         args: args,
         testOmit: true,
         shardIndex: shardIndex ?? 0,
@@ -63,7 +54,7 @@ class Tags {
   static const String instantiationsNeedTypeArguments = 'needsInst';
 }
 
-abstract class ComputeValueMixin<T> {
+abstract class ComputeValueMixin {
   Compiler get compiler;
 
   ResolutionWorldBuilder get resolutionWorldBuilder =>
@@ -239,38 +230,42 @@ class FindTypeVisitor extends BaseDartTypeVisitor<bool, Null> {
   }
 }
 
-/// Compute RTI need data for [member] from the new frontend.
-///
-/// Fills [actualMap] with the data.
-void computeKernelRtiMemberNeed(
-    Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  MemberDefinition definition = elementMap.getMemberDefinition(member);
-  new RtiMemberNeedIrComputer(
-          compiler.reporter,
-          actualMap,
-          elementMap,
-          member,
-          compiler,
-          backendStrategy.closureDataLookup as ClosureDataLookup<ir.Node>)
-      .run(definition.node);
+class RtiNeedDataComputer extends DataComputer {
+  const RtiNeedDataComputer();
+
+  @override
+  bool get computesClassData => true;
+
+  /// Compute RTI need data for [member] from the new frontend.
+  ///
+  /// Fills [actualMap] with the data.
+  @override
+  void computeMemberData(
+      Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
+      {bool verbose: false}) {
+    JsBackendStrategy backendStrategy = compiler.backendStrategy;
+    JsToElementMap elementMap = backendStrategy.elementMap;
+    MemberDefinition definition = elementMap.getMemberDefinition(member);
+    new RtiMemberNeedIrComputer(compiler.reporter, actualMap, elementMap,
+            member, compiler, backendStrategy.closureDataLookup)
+        .run(definition.node);
+  }
+
+  /// Compute RTI need data for [cls] from the new frontend.
+  ///
+  /// Fills [actualMap] with the data.
+  @override
+  void computeClassData(
+      Compiler compiler, ClassEntity cls, Map<Id, ActualData> actualMap,
+      {bool verbose: false}) {
+    JsBackendStrategy backendStrategy = compiler.backendStrategy;
+    JsToElementMap elementMap = backendStrategy.elementMap;
+    new RtiClassNeedIrComputer(compiler, elementMap, actualMap)
+        .computeClassValue(cls);
+  }
 }
 
-/// Compute RTI need data for [cls] from the new frontend.
-///
-/// Fills [actualMap] with the data.
-void computeKernelRtiClassNeed(
-    Compiler compiler, ClassEntity cls, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  new RtiClassNeedIrComputer(compiler, elementMap, actualMap)
-      .computeClassValue(cls);
-}
-
-abstract class IrMixin implements ComputeValueMixin<ir.Node> {
+abstract class IrMixin implements ComputeValueMixin {
   @override
   MemberEntity getFrontendMember(MemberEntity backendMember) {
     ElementEnvironment elementEnvironment = compiler
@@ -307,12 +302,11 @@ abstract class IrMixin implements ComputeValueMixin<ir.Node> {
 
   @override
   Local getFrontendClosure(MemberEntity member) {
-    KernelBackendStrategy backendStrategy = compiler.backendStrategy;
+    JsBackendStrategy backendStrategy = compiler.backendStrategy;
     ir.Node node = backendStrategy.elementMap.getMemberDefinition(member).node;
     if (node is ir.FunctionDeclaration || node is ir.FunctionExpression) {
       KernelFrontEndStrategy frontendStrategy = compiler.frontendStrategy;
-      KernelToElementMapForImpact frontendElementMap =
-          frontendStrategy.elementMap;
+      KernelToElementMap frontendElementMap = frontendStrategy.elementMap;
       return frontendElementMap.getLocalFunction(node);
     }
     return null;
@@ -320,9 +314,9 @@ abstract class IrMixin implements ComputeValueMixin<ir.Node> {
 }
 
 class RtiClassNeedIrComputer extends DataRegistry
-    with ComputeValueMixin<ir.Node>, IrMixin {
+    with ComputeValueMixin, IrMixin {
   final Compiler compiler;
-  final KernelToElementMapForBuilding _elementMap;
+  final JsToElementMap _elementMap;
   final Map<Id, ActualData> actualMap;
 
   RtiClassNeedIrComputer(this.compiler, this._elementMap, this.actualMap);
@@ -339,9 +333,9 @@ class RtiClassNeedIrComputer extends DataRegistry
 
 /// AST visitor for computing inference data for a member.
 class RtiMemberNeedIrComputer extends IrDataExtractor
-    with ComputeValueMixin<ir.Node>, IrMixin {
-  final KernelToElementMapForBuilding _elementMap;
-  final ClosureDataLookup<ir.Node> _closureDataLookup;
+    with ComputeValueMixin, IrMixin {
+  final JsToElementMap _elementMap;
+  final ClosureDataLookup _closureDataLookup;
   final Compiler compiler;
 
   RtiMemberNeedIrComputer(

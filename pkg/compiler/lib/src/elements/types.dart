@@ -264,8 +264,9 @@ class InterfaceType extends DartType {
 class TypedefType extends DartType {
   final TypedefEntity element;
   final List<DartType> typeArguments;
+  final FunctionType unaliased;
 
-  TypedefType(this.element, this.typeArguments);
+  TypedefType(this.element, this.typeArguments, this.unaliased);
 
   bool get isTypedef => true;
 
@@ -291,9 +292,11 @@ class TypedefType extends DartType {
     }
     List<DartType> newTypeArguments =
         _substTypes(typeArguments, arguments, parameters);
-    if (!identical(typeArguments, newTypeArguments)) {
+    FunctionType newUnaliased = unaliased.subst(arguments, parameters);
+    if (!identical(typeArguments, newTypeArguments) ||
+        !identical(unaliased, newUnaliased)) {
       // Create a new type only if necessary.
-      return new TypedefType(element, newTypeArguments);
+      return new TypedefType(element, newTypeArguments, newUnaliased);
     }
     return this;
   }
@@ -704,8 +707,8 @@ class FunctionType extends DartType {
   }
 
   bool _equalsInternal(FunctionType other, _Assumptions assumptions) {
+    if (typeVariables.length != other.typeVariables.length) return false;
     if (typeVariables.isNotEmpty) {
-      if (typeVariables.length != other.typeVariables.length) return false;
       assumptions ??= new _Assumptions();
       for (int index = 0; index < typeVariables.length; index++) {
         assumptions.assume(typeVariables[index], other.typeVariables[index]);
@@ -949,7 +952,6 @@ abstract class BaseDartTypeVisitor<R, A> extends DartTypeVisitor<R, A> {
 abstract class AbstractTypeRelation<T extends DartType>
     extends BaseDartTypeVisitor<bool, T> {
   CommonElements get commonElements;
-  bool get strongMode;
 
   final _Assumptions assumptions = new _Assumptions();
 
@@ -1183,30 +1185,15 @@ abstract class AbstractTypeRelation<T extends DartType>
 abstract class MoreSpecificVisitor<T extends DartType>
     extends AbstractTypeRelation<T> {
   bool isMoreSpecific(T t, T s) {
-    if (strongMode) {
-      if (identical(t, s) ||
-          s.treatAsDynamic ||
-          s.isVoid ||
-          s == commonElements.objectType ||
-          t == commonElements.nullType) {
-        return true;
-      }
-      if (t.treatAsDynamic) {
-        return false;
-      }
-    } else {
-      if (identical(t, s) || s.treatAsDynamic || t == commonElements.nullType) {
-        return true;
-      }
-      if (t.isVoid || s.isVoid) {
-        return false;
-      }
-      if (t.treatAsDynamic) {
-        return false;
-      }
-      if (s == commonElements.objectType) {
-        return true;
-      }
+    if (identical(t, s) ||
+        s.treatAsDynamic ||
+        s.isVoid ||
+        s == commonElements.objectType ||
+        t == commonElements.nullType) {
+      return true;
+    }
+    if (t.treatAsDynamic) {
+      return false;
     }
 
     t = getUnaliased(t);
@@ -1245,9 +1232,6 @@ abstract class MoreSpecificVisitor<T extends DartType>
 abstract class SubtypeVisitor<T extends DartType>
     extends MoreSpecificVisitor<T> {
   bool isSubtype(DartType t, DartType s) {
-    if (!strongMode && t.treatAsDynamic) {
-      return true;
-    }
     if (s.isFutureOr) {
       FutureOrType sFutureOr = s;
       if (isSubtype(t, sFutureOr.typeArgument)) {
@@ -1273,13 +1257,11 @@ abstract class SubtypeVisitor<T extends DartType>
   }
 
   bool invalidFunctionReturnTypes(T t, T s) {
-    if (strongMode) return !isSubtype(t, s);
-    return !s.isVoid && !isAssignable(t, s);
+    return !isSubtype(t, s);
   }
 
   bool invalidFunctionParameterTypes(T t, T s) {
-    if (strongMode) return !isSubtype(s, t);
-    return !isAssignable(t, s);
+    return !isSubtype(s, t);
   }
 
   bool invalidTypeVariableBounds(T bound, T s) {

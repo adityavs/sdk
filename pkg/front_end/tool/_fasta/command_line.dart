@@ -4,7 +4,9 @@
 
 library fasta.tool.command_line;
 
-import 'dart:io' show exit;
+import 'dart:async' show Future;
+
+import 'dart:io' show exit, exitCode;
 
 import 'package:build_integration/file_system/single_root.dart'
     show SingleRootFileSystem;
@@ -25,6 +27,9 @@ import 'package:front_end/src/compute_platform_binaries_location.dart'
 
 import 'package:front_end/src/fasta/compiler_context.dart' show CompilerContext;
 
+import 'package:front_end/src/fasta/deprecated_problems.dart'
+    show deprecated_InputError;
+
 import 'package:front_end/src/fasta/fasta_codes.dart'
     show
         Message,
@@ -33,7 +38,7 @@ import 'package:front_end/src/fasta/fasta_codes.dart'
         messageFastaUsageShort,
         templateUnspecified;
 
-import 'package:front_end/src/fasta/problems.dart' show unhandled;
+import 'package:front_end/src/fasta/problems.dart' show DebugAbort, unhandled;
 
 import 'package:front_end/src/fasta/severity.dart' show Severity;
 
@@ -231,6 +236,7 @@ const Map<String, dynamic> optionSpecification = const <String, dynamic>{
   "--target": String,
   "--verbose": false,
   "--verify": false,
+  "--bytecode": false,
   "-h": "--help",
   "-o": "--output",
   "-t": "--target",
@@ -292,6 +298,8 @@ ProcessedOptions analyzeCommandLine(
 
   final bool warningsAreFatal = fatal.contains("warnings");
 
+  final bool bytecode = options["--bytecode"];
+
   final bool compileSdk = options.containsKey("--compile-sdk");
 
   final String singleRootScheme = options["--single-root-scheme"];
@@ -327,7 +335,7 @@ ProcessedOptions analyzeCommandLine(
     }
 
     return new ProcessedOptions(
-        new CompilerOptions()
+        options: new CompilerOptions()
           ..sdkSummary = options["--platform"]
           ..librariesSpecificationUri =
               resolveInputUri(arguments[1], extraSchemes: extraSchemes)
@@ -341,9 +349,10 @@ ProcessedOptions analyzeCommandLine(
           ..embedSourceText = !excludeSource
           ..debugDump = dumpIr
           ..verbose = verbose
-          ..verify = verify,
-        <Uri>[Uri.parse(arguments[0])],
-        resolveInputUri(arguments[3], extraSchemes: extraSchemes));
+          ..verify = verify
+          ..bytecode = bytecode,
+        inputs: <Uri>[Uri.parse(arguments[0])],
+        output: resolveInputUri(arguments[3], extraSchemes: extraSchemes));
   } else if (arguments.isEmpty) {
     return throw new CommandLineProblem.deprecated("No Dart file specified.");
   }
@@ -358,7 +367,8 @@ ProcessedOptions analyzeCommandLine(
   final Uri platform = compileSdk
       ? null
       : (options["--platform"] ??
-          computePlatformBinariesLocation().resolve("vm_platform.dill"));
+          computePlatformBinariesLocation().resolve(
+              strongMode ? "vm_platform_strong.dill" : "vm_platform.dill"));
 
   CompilerOptions compilerOptions = new CompilerOptions()
     ..compileSdk = compileSdk
@@ -383,14 +393,15 @@ ProcessedOptions analyzeCommandLine(
       inputs.add(resolveInputUri(argument, extraSchemes: extraSchemes));
     }
   }
-  return new ProcessedOptions(compilerOptions, inputs, output);
+  return new ProcessedOptions(
+      options: compilerOptions, inputs: inputs, output: output);
 }
 
-dynamic withGlobalOptions(
+Future<T> withGlobalOptions<T>(
     String programName,
     List<String> arguments,
     bool areRestArgumentsInputs,
-    dynamic f(CompilerContext context, List<String> restArguments)) {
+    Future<T> f(CompilerContext context, List<String> restArguments)) {
   bool verbose = false;
   for (String argument in arguments) {
     if (argument == "--") break;
@@ -407,11 +418,11 @@ dynamic withGlobalOptions(
     options = analyzeCommandLine(
         programName, parsedArguments, areRestArgumentsInputs, verbose);
   } on CommandLineProblem catch (e) {
-    options = new ProcessedOptions(new CompilerOptions());
+    options = new ProcessedOptions();
     problem = e;
   }
 
-  return CompilerContext.runWithOptions(options, (c) {
+  return CompilerContext.runWithOptions<T>(options, (c) {
     if (problem != null) {
       print(computeUsage(programName, verbose).message);
       print(c.formatWithoutLocation(problem.message, Severity.error));
@@ -457,4 +468,26 @@ Message computeUsage(String programName, bool verbose) {
   sb.write(options);
   // TODO(ahe): Don't use [templateUnspecified].
   return templateUnspecified.withArguments("$sb");
+}
+
+Future<T> runProtectedFromAbort<T>(Future<T> Function() action,
+    [T failingValue]) async {
+  if (CompilerContext.isActive) {
+    throw "runProtectedFromAbort should be called from 'main',"
+        " that is, outside a compiler context.";
+  }
+  try {
+    return await action();
+  } on DebugAbort catch (e) {
+    print(e.message.message);
+
+    // DebugAbort should never happen in production code, so we want test.py to
+    // treat this as a crash which is signalled by exiting with 255.
+    exit(255);
+  } on deprecated_InputError catch (e) {
+    exitCode = 1;
+    await CompilerContext.runWithDefaultOptions((c) =>
+        new Future<void>.sync(() => c.report(e.message, Severity.error)));
+  }
+  return failingValue;
 }

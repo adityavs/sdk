@@ -1712,7 +1712,7 @@ A T;''');
     // SimpleIdentifier  HideCombinator  ImportDirective
     addSource('/testAB.dart', '''
 library libAB;
-part '/partAB.dart';
+part 'partAB.dart';
 class A { }
 class B { }''');
     addSource('/partAB.dart', '''
@@ -1736,7 +1736,7 @@ class X {}''');
     // SimpleIdentifier  HideCombinator  ImportDirective
     addSource('/testAB.dart', '''
 library libAB;
-part '/partAB.dart';
+part 'partAB.dart';
 class A { }
 class B { }''');
     addSource('/partAB.dart', '''
@@ -2908,6 +2908,12 @@ class C {foo(){var f; {var x;} f[T^]}}''');
     //assertNotSuggested('T1');
   }
 
+  test_inferredType() async {
+    addTestSource('main() { var v = 42; ^ }');
+    await computeSuggestions();
+    assertSuggestLocalVariable('v', 'int');
+  }
+
   test_InstanceCreationExpression() async {
     addTestSource('''
 class A {foo(){var f; {var x;}}}
@@ -3772,8 +3778,8 @@ F1() { }
 class X {X.c(); X._d(); z() {}}''');
     addSource('/testA.dart', '''
 library libA;
-import "${convertPathForImport("/testB.dart")}";
-part "$testFile";
+import "testB.dart";
+part "${resourceProvider.pathContext.basename(testFile)}";
 class A { }
 var m;''');
     addTestSource('''
@@ -3809,8 +3815,8 @@ part of libA;
 class B { }''');
     addTestSource('''
 library libA;
-import "${convertPathForImport("/testB.dart")}";
-part "/testA.dart";
+import "testB.dart";
+part "testA.dart";
 class A { A({String boo: 'hoo'}) { } }
 main() {new ^}
 var m;''');
@@ -4200,12 +4206,6 @@ class X {foo(){A^.bar}}''');
     await computeSuggestions();
     assertSuggestLocalVariable('ab', null);
     assertSuggestLocalVariable('_ab', null);
-  }
-
-  test_inferredType() async {
-    addTestSource('main() { var v = 42; ^ }');
-    await computeSuggestions();
-    assertSuggestLocalVariable('v', 'int');
   }
 
   test_prioritization_public() async {

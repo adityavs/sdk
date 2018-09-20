@@ -37,7 +37,7 @@ main() {
     var compiler = ModuleCompiler(options, analysisRoot: optionsDir);
     var context = compiler.context;
     var sdk = context.sourceFactory.dartSdk;
-    expect(sdk, isInstanceOf<SummaryBasedDartSdk>());
+    expect(sdk, const TypeMatcher<SummaryBasedDartSdk>());
     var processors = context.analysisOptions.errorProcessors;
     expect(processors, hasLength(1));
     expect(processors[0].code, CompileTimeErrorCode.UNDEFINED_CLASS.name);
@@ -78,11 +78,11 @@ main() {
     ];
 
     var argResults = ddcArgParser().parse(args);
-    var options = AnalyzerOptions.fromArguments(argResults);
-    expect(options.summaryPaths,
+    var options = CompilerOptions.fromArguments(argResults);
+    expect(options.summaryModules.keys.toList(),
         orderedEquals(['normal', 'custom/path', 'another', 'custom/path2']));
-    expect(options.customSummaryModules['custom/path'], equals('module'));
-    expect(options.customSummaryModules['custom/path2'], equals('module2'));
-    expect(options.customSummaryModules.containsKey('normal'), isFalse);
+    expect(options.summaryModules['custom/path'], equals('module'));
+    expect(options.summaryModules['custom/path2'], equals('module2'));
+    expect(options.summaryModules.containsKey('normal'), isFalse);
   });
 }

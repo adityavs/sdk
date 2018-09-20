@@ -95,11 +95,19 @@ abstract class Type extends TypeExpr {
 
   Class getConcreteClass(TypeHierarchy typeHierarchy) => null;
 
+  bool isSubtypeOf(TypeHierarchy typeHierarchy, DartType dartType) => false;
+
   @override
   Type getComputedType(List<Type> types) => this;
 
   /// Order of precedence for evaluation of union/intersection.
   int get order;
+
+  /// Returns true iff this type is fully specialized.
+  bool get isSpecialized => true;
+
+  /// Returns specialization of this type using the given [TypeHierarchy].
+  Type specialize(TypeHierarchy typeHierarchy) => this;
 
   /// Calculate union of this and [other] types.
   Type union(Type other, TypeHierarchy typeHierarchy);
@@ -162,7 +170,19 @@ class NullableType extends Type {
   String toString() => "${baseType}?";
 
   @override
+  bool isSubtypeOf(TypeHierarchy typeHierarchy, DartType dartType) =>
+      baseType.isSubtypeOf(typeHierarchy, dartType);
+
+  @override
   int get order => TypeOrder.Nullable.index;
+
+  @override
+  bool get isSpecialized => baseType.isSpecialized;
+
+  @override
+  Type specialize(TypeHierarchy typeHierarchy) => baseType.isSpecialized
+      ? this
+      : new NullableType(baseType.specialize(typeHierarchy));
 
   @override
   Type union(Type other, TypeHierarchy typeHierarchy) {
@@ -263,6 +283,10 @@ class SetType extends Type {
 
   @override
   String toString() => "_T ${types}";
+
+  @override
+  bool isSubtypeOf(TypeHierarchy typeHierarchy, DartType dartType) =>
+      types.every((ConcreteType t) => t.isSubtypeOf(typeHierarchy, dartType));
 
   @override
   int get order => TypeOrder.Set.index;
@@ -383,6 +407,10 @@ class ConeType extends Type {
       .getConcreteClass(typeHierarchy);
 
   @override
+  bool isSubtypeOf(TypeHierarchy typeHierarchy, DartType dartType) =>
+      typeHierarchy.isSubtype(this.dartType, dartType);
+
+  @override
   int get hashCode => (dartType.hashCode + 37) & kHashMask;
 
   @override
@@ -394,6 +422,13 @@ class ConeType extends Type {
 
   @override
   int get order => TypeOrder.Cone.index;
+
+  @override
+  bool get isSpecialized => false;
+
+  @override
+  Type specialize(TypeHierarchy typeHierarchy) =>
+      typeHierarchy.specializeTypeCone(dartType);
 
   @override
   Type union(Type other, TypeHierarchy typeHierarchy) {
@@ -482,6 +517,10 @@ class ConcreteType extends Type implements Comparable<ConcreteType> {
   @override
   Class getConcreteClass(TypeHierarchy typeHierarchy) =>
       (dartType as InterfaceType).classNode;
+
+  @override
+  bool isSubtypeOf(TypeHierarchy typeHierarchy, DartType dartType) =>
+      typeHierarchy.isSubtype(this.dartType, dartType);
 
   @override
   int get hashCode => (classId.hashCode ^ 0x1234) & kHashMask;

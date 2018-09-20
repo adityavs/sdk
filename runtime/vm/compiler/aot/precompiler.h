@@ -229,30 +229,46 @@ class InstanceKeyValueTrait {
 
 typedef DirectChainedHashMap<InstanceKeyValueTrait> InstanceSet;
 
+struct PrecompilerFieldInfo {
+  intptr_t cid;
+
+  // The most recently compiled constructor which stored the field.
+  // Used in DartPrecompilationPipeline::FinalizeCompilation to find out if
+  // this field was not initialized in the constructor being compiled.
+  const RawFunction* constructor;
+
+  bool operator==(const PrecompilerFieldInfo& other) const {
+    return (cid == other.cid) && (constructor == other.constructor);
+  }
+
+  bool operator!=(const PrecompilerFieldInfo& other) const {
+    return !(*this == other);
+  }
+};
+
 struct FieldTypePair {
   // Typedefs needed for the DirectChainedHashMap template.
   typedef const Field* Key;
-  typedef intptr_t Value;
+  typedef PrecompilerFieldInfo Value;
   typedef FieldTypePair Pair;
 
-  static Key KeyOf(Pair kv) { return kv.field_; }
+  static Key KeyOf(Pair kv) { return kv.field; }
 
-  static Value ValueOf(Pair kv) { return kv.cid_; }
+  static Value ValueOf(Pair kv) { return kv.field_info; }
 
   static inline intptr_t Hashcode(Key key) { return key->token_pos().value(); }
 
   static inline bool IsKeyEqual(Pair pair, Key key) {
-    return pair.field_->raw() == key->raw();
+    return pair.field->raw() == key->raw();
   }
 
-  FieldTypePair(const Field* f, intptr_t cid) : field_(f), cid_(cid) {}
+  FieldTypePair(const Field* f, intptr_t cid, const RawFunction* constructor)
+      : field(f), field_info({cid, constructor}) {}
 
-  FieldTypePair() : field_(NULL), cid_(-1) {}
+  FieldTypePair() : field(nullptr), field_info({-1, nullptr}) {}
 
-  void Print() const;
-
-  const Field* field_;
-  intptr_t cid_;
+  const Field* field;
+  PrecompilerFieldInfo field_info;
 };
 
 typedef DirectChainedHashMap<FieldTypePair> FieldTypeMap;
@@ -343,8 +359,6 @@ class Precompiler : public ValueObject {
   }
 
   FieldTypeMap* field_type_map() { return &field_type_map_; }
-
-  static void PopulateWithICData(const Function& func, FlowGraph* graph);
 
  private:
   explicit Precompiler(Thread* thread);
@@ -466,7 +480,8 @@ class FunctionsTraits {
 
 typedef UnorderedHashSet<FunctionsTraits> UniqueFunctionsSet;
 
-#if defined(DART_PRECOMPILER)
+#if defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_DBC) &&                  \
+    !defined(TARGET_ARCH_IA32)
 // ObfuscationMap maps Strings to Strings.
 class ObfuscationMapTraits {
  public:
@@ -670,7 +685,8 @@ class Obfuscator {
 
   static void Deobfuscate(Thread* thread, const GrowableObjectArray& pieces) {}
 };
-#endif  // DART_PRECOMPILER
+#endif  // defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_DBC) &&           \
+        // !defined(TARGET_ARCH_IA32)
 
 }  // namespace dart
 

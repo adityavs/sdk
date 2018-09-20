@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-library analyzer.src.task.strong_mode;
-
 import 'dart:collection';
 
 import 'package:analyzer/dart/ast/ast.dart';
@@ -72,9 +70,7 @@ class InstanceMemberInferrer {
   InstanceMemberInferrer(
       TypeProvider typeProvider, this.inheritanceManagerProvider,
       {TypeSystem typeSystem})
-      : typeSystem = (typeSystem != null)
-            ? typeSystem
-            : new TypeSystemImpl(typeProvider),
+      : typeSystem = typeSystem ?? new StrongTypeSystemImpl(typeProvider),
         this.typeProvider = typeProvider;
 
   /**
@@ -82,14 +78,8 @@ class InstanceMemberInferrer {
    * compilation [unit].
    */
   void inferCompilationUnit(CompilationUnitElement unit) {
-    for (ClassElement classElement in unit.types) {
-      try {
-        _inferClass(classElement);
-      } on _CycleException {
-        // This is a short circuit return to prevent types that inherit from
-        // types containing a circular reference from being inferred.
-      }
-    }
+    _inferClasses(unit.mixins);
+    _inferClasses(unit.types);
   }
 
   /**
@@ -310,18 +300,19 @@ class InstanceMemberInferrer {
         _inferType(classElement.supertype);
         classElement.mixins.forEach(_inferType);
         classElement.interfaces.forEach(_inferType);
+        classElement.superclassConstraints.forEach(_inferType);
         //
         // Then infer the types for the members.
         //
-        classElement.fields.forEach((field) {
+        for (FieldElement field in classElement.fields) {
           _inferField(inheritanceManager, field);
-        });
-        classElement.accessors.forEach((accessor) {
+        }
+        for (PropertyAccessorElement accessor in classElement.accessors) {
           _inferAccessor(inheritanceManager, accessor);
-        });
-        classElement.methods.forEach((method) {
+        }
+        for (MethodElement method in classElement.methods) {
           _inferExecutable(inheritanceManager, method);
-        });
+        }
         //
         // Infer initializing formal parameter types. This must happen after
         // field types are inferred.
@@ -330,6 +321,17 @@ class InstanceMemberInferrer {
         classElement.hasBeenInferred = true;
       } finally {
         elementsBeingInferred.remove(classElement);
+      }
+    }
+  }
+
+  void _inferClasses(List<ClassElement> elements) {
+    for (ClassElement element in elements) {
+      try {
+        _inferClass(element);
+      } on _CycleException {
+        // This is a short circuit return to prevent types that inherit from
+        // types containing a circular reference from being inferred.
       }
     }
   }

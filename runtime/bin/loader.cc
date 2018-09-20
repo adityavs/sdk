@@ -674,18 +674,37 @@ Dart_Handle Loader::LibraryTagHandler(Dart_LibraryTag tag,
                                  MallocFinalizer);
     return result;
   }
-  if (tag == Dart_kImportResolvedExtensionTag) {
-    if (strncmp(url_string, "file://", 7)) {
+  if (tag == Dart_kImportExtensionTag) {
+    if (strncmp(url_string, "dart-ext:", 9)) {
       return DartUtils::NewError(
-          "Resolved native extensions must use the file:// scheme.");
+          "Native extensions must use the dart-ext: scheme.");
     }
-    const char* absolute_path = DartUtils::RemoveScheme(url_string);
+    const char* path = DartUtils::RemoveScheme(url_string);
 
-    if (!File::IsAbsolutePath(absolute_path)) {
-      return DartUtils::NewError("Native extension path must be absolute.");
+    const char* lib_uri = NULL;
+    result = Dart_StringToCString(Dart_LibraryResolvedUrl(library), &lib_uri);
+    RETURN_ERROR(result);
+
+    UriDecoder decoder(lib_uri);
+    lib_uri = decoder.decoded();
+
+    char* lib_path = NULL;
+    if (strncmp(lib_uri, "file://", 7) == 0) {
+      lib_path = DartUtils::DirName(lib_uri + 7);
+    } else {
+      lib_path = strdup(lib_uri);
     }
 
-    return Extensions::LoadExtension("/", absolute_path, library);
+    if (!File::IsAbsolutePath(path) && PathContainsSeparator(path)) {
+      return DartUtils::NewError(
+          "Native extension path must be absolute, or simply the file name: "
+          "%s: ",
+          path);
+    }
+
+    Dart_Handle result = Extensions::LoadExtension(lib_path, path, library);
+    free(lib_path);
+    return result;
   }
   if (tag != Dart_kScriptTag) {
     // Special case for handling dart: imports and parts.
@@ -772,7 +791,7 @@ Dart_Handle Loader::LibraryTagHandler(Dart_LibraryTag tag,
       uint8_t* kernel_buffer = NULL;
       intptr_t kernel_buffer_size = -1;
       dfe.CompileAndReadScript(url_string, &kernel_buffer, &kernel_buffer_size,
-                               &error, &exit_code, true /* strong */, NULL);
+                               &error, &exit_code, NULL);
       if (exit_code == 0) {
         return Dart_LoadLibraryFromKernel(kernel_buffer, kernel_buffer_size);
       } else if (exit_code == kCompilationErrorExitCode) {

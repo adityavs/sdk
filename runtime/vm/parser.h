@@ -157,6 +157,18 @@ class ParsedFunction : public ZoneAllocated {
   }
   bool has_expression_temp_var() const { return expression_temp_var_ != NULL; }
 
+  LocalVariable* entry_points_temp_var() const {
+    ASSERT(has_entry_points_temp_var());
+    return entry_points_temp_var_;
+  }
+  void set_entry_points_temp_var(LocalVariable* value) {
+    ASSERT(!has_entry_points_temp_var());
+    entry_points_temp_var_ = value;
+  }
+  bool has_entry_points_temp_var() const {
+    return entry_points_temp_var_ != NULL;
+  }
+
   LocalVariable* finally_return_temp_var() const {
     ASSERT(has_finally_return_temp_var());
     return finally_return_temp_var_;
@@ -171,6 +183,7 @@ class ParsedFunction : public ZoneAllocated {
   void EnsureFinallyReturnTemp(bool is_async);
 
   LocalVariable* EnsureExpressionTemp();
+  LocalVariable* EnsureEntryPointsTemp();
 
   bool HasDeferredPrefixes() const { return deferred_prefixes_->length() != 0; }
   ZoneGrowableArray<const LibraryPrefix*>* deferred_prefixes() const {
@@ -187,6 +200,7 @@ class ParsedFunction : public ZoneAllocated {
 
   void AllocateVariables();
   void AllocateIrregexpVariables(intptr_t num_stack_locals);
+  void AllocateBytecodeVariables(intptr_t num_stack_locals);
 
   void record_await() { have_seen_await_expr_ = true; }
   bool have_seen_await() const { return have_seen_await_expr_; }
@@ -216,8 +230,16 @@ class ParsedFunction : public ZoneAllocated {
     return raw_type_arguments_var_;
   }
 
+  void SetRawTypeArgumentsVariable(LocalVariable* raw_type_arguments_var) {
+    raw_type_arguments_var_ = raw_type_arguments_var;
+  }
+
+  void SetRawParameters(ZoneGrowableArray<LocalVariable*>* raw_parameters) {
+    raw_parameters_ = raw_parameters;
+  }
+
   LocalVariable* RawParameterVariable(intptr_t i) const {
-    return raw_parameters_[i];
+    return raw_parameters_->At(i);
   }
 
  private:
@@ -232,13 +254,14 @@ class ParsedFunction : public ZoneAllocated {
   LocalVariable* current_context_var_;
   LocalVariable* arg_desc_var_;
   LocalVariable* expression_temp_var_;
+  LocalVariable* entry_points_temp_var_;
   LocalVariable* finally_return_temp_var_;
   ZoneGrowableArray<const LibraryPrefix*>* deferred_prefixes_;
   ZoneGrowableArray<const Field*>* guarded_fields_;
   ZoneGrowableArray<const Instance*>* default_parameter_values_;
 
   LocalVariable* raw_type_arguments_var_;
-  ZoneGrowableArray<LocalVariable*> raw_parameters_;
+  ZoneGrowableArray<LocalVariable*>* raw_parameters_ = nullptr;
 
   VariableIndex first_parameter_index_;
   int num_stack_locals_;
@@ -412,6 +435,7 @@ class Parser : public ValueObject {
   void SkipToMatching();
   void SkipToMatchingParenthesis();
   void SkipBlock();
+  void SkipOneMetadata();
   TokenPosition SkipMetadata();
   bool IsPatchAnnotation(TokenPosition pos);
   bool IsPragmaAnnotation(TokenPosition pos);

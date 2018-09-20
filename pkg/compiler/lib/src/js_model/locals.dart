@@ -9,12 +9,14 @@ import 'package:kernel/ast.dart' as ir;
 import '../closure.dart';
 import '../common.dart';
 import '../elements/entities.dart';
+import '../elements/indexed.dart';
 import '../elements/jumps.dart';
 import '../elements/types.dart';
 import '../kernel/element_map.dart';
-import '../kernel/indexed.dart';
+import '../ir/util.dart';
 
-import '../js_model/elements.dart' show JGeneratorBody;
+import 'element_map.dart';
+import 'elements.dart' show JGeneratorBody;
 
 class GlobalLocalsMap {
   Map<MemberEntity, KernelToLocalsMap> _localsMaps =
@@ -146,7 +148,7 @@ class KernelToLocalsMapImpl implements KernelToLocalsMap {
 
   @override
   Local getLocalTypeVariable(
-      ir.TypeParameterType node, KernelToElementMap elementMap) {
+      ir.TypeParameterType node, JsToElementMap elementMap) {
     // TODO(efortuna, johnniwinther): We're not registering the type variables
     // like we are for the variable declarations. Is that okay or do we need to
     // make TypeVariableLocal a JLocal?
@@ -159,20 +161,8 @@ class KernelToLocalsMapImpl implements KernelToLocalsMap {
   }
 
   @override
-  DartType getLocalType(KernelToElementMap elementMap, covariant JLocal local) {
+  DartType getLocalType(JsToElementMap elementMap, covariant JLocal local) {
     return _locals.getData(local).getDartType(elementMap);
-  }
-
-  @override
-  CapturedLoopScope getCapturedLoopScope(
-      ClosureDataLookup closureLookup, ir.TreeNode node) {
-    return closureLookup.getCapturedLoopScope(node);
-  }
-
-  @override
-  ClosureRepresentationInfo getClosureRepresentationInfo(
-      ClosureDataLookup closureLookup, ir.TreeNode node) {
-    return closureLookup.getClosureInfo(node);
   }
 }
 
@@ -194,9 +184,9 @@ class JumpVisitor extends ir.Visitor {
     });
   }
 
-  JLabelDefinition _getOrCreateLabel(JJumpTarget target, ir.Node node) {
+  JLabelDefinition _getOrCreateLabel(JJumpTarget target) {
     if (target.labels.isEmpty) {
-      return target.addLabel(node, 'label${labelIndex++}');
+      return target.addLabel('label${labelIndex++}');
     } else {
       return target.labels.single;
     }
@@ -268,7 +258,7 @@ class JumpVisitor extends ir.Visitor {
         search = search.parent;
       }
       if (needsLabel) {
-        JLabelDefinition label = _getOrCreateLabel(target, node.target);
+        JLabelDefinition label = _getOrCreateLabel(target);
         label.isBreakTarget = true;
       }
     } else if (canBeContinueTarget(parent)) {
@@ -292,7 +282,7 @@ class JumpVisitor extends ir.Visitor {
         search = search.parent;
       }
       if (needsLabel) {
-        JLabelDefinition label = _getOrCreateLabel(target, node.target);
+        JLabelDefinition label = _getOrCreateLabel(target);
         label.isContinueTarget = true;
       }
     } else {
@@ -305,7 +295,7 @@ class JumpVisitor extends ir.Visitor {
       // and label is therefore always needed.
       target = _getJumpTarget(node.target);
       target.isBreakTarget = true;
-      JLabelDefinition label = _getOrCreateLabel(target, node.target);
+      JLabelDefinition label = _getOrCreateLabel(target);
       label.isBreakTarget = true;
     }
     jumpTargetMap[node] = target;
@@ -317,7 +307,7 @@ class JumpVisitor extends ir.Visitor {
     JJumpTarget target = _getJumpTarget(node.target);
     target.isContinueTarget = true;
     jumpTargetMap[node] = target;
-    JLabelDefinition label = _getOrCreateLabel(target, node.target);
+    JLabelDefinition label = _getOrCreateLabel(target);
     label.isContinueTarget = true;
     super.visitContinueSwitchStatement(node);
   }
@@ -335,10 +325,10 @@ class JumpVisitor extends ir.Visitor {
   }
 }
 
-class JJumpTarget extends JumpTarget<ir.Node> {
+class JJumpTarget extends JumpTarget {
   final MemberEntity memberContext;
   final int nestingLevel;
-  List<LabelDefinition<ir.Node>> _labels;
+  List<LabelDefinition> _labels;
   final bool isSwitch;
   final bool isSwitchCase;
 
@@ -349,24 +339,18 @@ class JJumpTarget extends JumpTarget<ir.Node> {
   bool isContinueTarget = false;
 
   @override
-  LabelDefinition<ir.Node> addLabel(ir.Node label, String labelName,
+  LabelDefinition addLabel(String labelName,
       {bool isBreakTarget: false, bool isContinueTarget: false}) {
-    _labels ??= <LabelDefinition<ir.Node>>[];
-    LabelDefinition<ir.Node> labelDefinition = new JLabelDefinition(
-        this, labelName,
+    _labels ??= <LabelDefinition>[];
+    LabelDefinition labelDefinition = new JLabelDefinition(this, labelName,
         isBreakTarget: isBreakTarget, isContinueTarget: isContinueTarget);
     _labels.add(labelDefinition);
     return labelDefinition;
   }
 
   @override
-  List<LabelDefinition<ir.Node>> get labels {
-    return _labels ?? const <LabelDefinition<ir.Node>>[];
-  }
-
-  @override
-  ir.Node get statement {
-    throw new UnimplementedError('JJumpTarget.statement');
+  List<LabelDefinition> get labels {
+    return _labels ?? const <LabelDefinition>[];
   }
 
   String toString() {
@@ -389,8 +373,8 @@ class JJumpTarget extends JumpTarget<ir.Node> {
   }
 }
 
-class JLabelDefinition extends LabelDefinition<ir.Node> {
-  final JumpTarget<ir.Node> target;
+class JLabelDefinition extends LabelDefinition {
+  final JumpTarget target;
   final String labelName;
   bool isBreakTarget;
   bool isContinueTarget;
@@ -449,7 +433,7 @@ class LocalData {
 
   LocalData(this.node);
 
-  DartType getDartType(KernelToElementMap elementMap) {
+  DartType getDartType(JsToElementMap elementMap) {
     return _type ??= elementMap.getDartType(node.type);
   }
 
@@ -460,7 +444,7 @@ class LocalData {
 /// Positional parameters by index, then named parameters lexicographically.
 void forEachOrderedParameter(
     GlobalLocalsMap globalLocalsMap,
-    KernelToElementMapForBuilding elementMap,
+    JsToElementMap elementMap,
     FunctionEntity function,
     void f(Local parameter)) {
   KernelToLocalsMap localsMap = globalLocalsMap.getLocalsMap(function);

@@ -38,11 +38,16 @@ import 'package:front_end/src/fasta/compiler_context.dart' show CompilerContext;
 import 'package:front_end/src/fasta/incremental_compiler.dart'
     show IncrementalCompiler;
 
+import 'package:kernel/target/targets.dart' show TargetFlags;
+
 import 'package:kernel/text/ast_to_text.dart' show Printer;
+
+import 'package:vm/target/vm.dart' show VmTarget;
 
 import '../../lib/src/fasta/testing/kernel_chain.dart' show runDiff, openWrite;
 
-import '../../lib/src/fasta/kernel/utils.dart' show writeComponentToFile;
+import '../../lib/src/fasta/kernel/utils.dart'
+    show writeComponentToFile, serializeProcedure;
 
 const JsonEncoder json = const JsonEncoder.withIndent("  ");
 
@@ -280,6 +285,37 @@ class CompileExpression extends Step<List<TestCase>, List<TestCase>, Context> {
 
   String get name => "compile expression";
 
+  // Compile [test.expression], update [test.errors] with results.
+  // As a side effect - verify that generated procedure can be serialized.
+  void compileExpression(TestCase test, IncrementalCompiler compiler,
+      Component component, Context context) async {
+    Map<String, DartType> definitions = {};
+    for (String name in test.definitions) {
+      definitions[name] = new DynamicType();
+    }
+    List<TypeParameter> typeParams = [];
+    for (String name in test.typeDefinitions) {
+      typeParams.add(new TypeParameter(name, new DynamicType()));
+    }
+
+    Procedure compiledProcedure = await compiler.compileExpression(
+        test.expression,
+        definitions,
+        typeParams,
+        "debugExpr",
+        test.library,
+        test.className,
+        test.isStaticMethod);
+    List<CompilationMessage> errors = context.takeErrors();
+    test.results.add(new CompilationResult(compiledProcedure, errors));
+    if (compiledProcedure != null) {
+      // Confirm we can serialize generated procedure.
+      component.computeCanonicalNames();
+      List<int> list = serializeProcedure(compiledProcedure);
+      assert(list.length > 0);
+    }
+  }
+
   Future<Result<List<TestCase>>> run(
       List<TestCase> tests, Context context) async {
     for (var test in tests) {
@@ -301,39 +337,19 @@ class CompileExpression extends Step<List<TestCase>, List<TestCase>, Context> {
         context.fileSystem.entityForUri(dillFileUri).writeAsBytesSync(
             await new File.fromUri(dillFileUri).readAsBytes());
       }
+      compileExpression(test, sourceCompiler, component, context);
 
       var dillCompiler =
           new IncrementalCompiler(context.compilerContext, dillFileUri);
-      await dillCompiler.computeDelta(entryPoint: test.entryPoint);
+      component = await dillCompiler.computeDelta(entryPoint: test.entryPoint);
+      component.computeCanonicalNames();
       await dillFile.delete();
 
       errors = context.takeErrors();
-
       // Since it compiled successfully from source, the bootstrap-from-Dill
       // should also succeed without errors.
       assert(errors.isEmpty);
-
-      Map<String, DartType> definitions = {};
-      for (String name in test.definitions) {
-        definitions[name] = new DynamicType();
-      }
-      List<TypeParameter> typeParams = [];
-      for (String name in test.typeDefinitions) {
-        typeParams.add(new TypeParameter(name, new DynamicType()));
-      }
-
-      for (var compiler in [sourceCompiler, dillCompiler]) {
-        Procedure compiledProcedure = await compiler.compileExpression(
-            test.expression,
-            definitions,
-            typeParams,
-            "debugExpr",
-            test.library,
-            test.className,
-            test.isStaticMethod);
-        var errors = context.takeErrors();
-        test.results.add(new CompilationResult(compiledProcedure, errors));
-      }
+      compileExpression(test, dillCompiler, component, context);
     }
     return new Result.pass(tests);
   }
@@ -363,6 +379,7 @@ Future<Context> createContext(
 
   final CompilerOptions optionBuilder = new CompilerOptions()
     ..strongMode = true
+    ..target = new VmTarget(new TargetFlags(strongMode: true))
     ..reportMessages = true
     ..verbose = true
     ..fileSystem = fs
@@ -372,7 +389,7 @@ Future<Context> createContext(
     };
 
   final ProcessedOptions options =
-      new ProcessedOptions(optionBuilder, [entryPoint]);
+      new ProcessedOptions(options: optionBuilder, inputs: [entryPoint]);
 
   final ExternalStateSnapshot snapshot =
       new ExternalStateSnapshot(await options.loadSdkSummary(null));

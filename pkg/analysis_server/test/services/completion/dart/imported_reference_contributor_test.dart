@@ -1493,7 +1493,7 @@ class B extends A {
     // SimpleIdentifier  HideCombinator  ImportDirective
     addSource('/testAB.dart', '''
         library libAB;
-        part '/partAB.dart';
+        part 'partAB.dart';
         class A { }
         class B { }''');
     addSource('/partAB.dart', '''
@@ -1517,7 +1517,7 @@ class B extends A {
     // SimpleIdentifier  HideCombinator  ImportDirective
     addSource('/testAB.dart', '''
         library libAB;
-        part '/partAB.dart';
+        part 'partAB.dart';
         class A { }
         class B { }''');
     addSource('/partAB.dart', '''
@@ -3614,7 +3614,7 @@ class B extends A {
     addTestSource('''
         library libA;
         import "${convertPathForImport('/testB.dart')}";
-        part "/testA.dart";
+        part "testA.dart";
         class A { A({String boo: 'hoo'}) { } }
         main() {new ^}
         var m;''');

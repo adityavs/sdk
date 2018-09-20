@@ -36,10 +36,6 @@
 
 namespace dart {
 
-DEFINE_FLAG(bool,
-            eliminate_type_checks,
-            true,
-            "Eliminate type checks when allowed by static type analysis.");
 DEFINE_FLAG(bool, print_ast, false, "Print abstract syntax tree.");
 DEFINE_FLAG(bool, print_scopes, false, "Print scopes of local variables.");
 DEFINE_FLAG(bool,
@@ -164,7 +160,7 @@ void NestedStatement::AdjustContextLevel(intptr_t context_level) {
 }
 
 intptr_t FlowGraphBuilder::GetNextDeoptId() const {
-  intptr_t deopt_id = thread()->GetNextDeoptId();
+  intptr_t deopt_id = thread()->compiler_state().GetNextDeoptId();
   if (context_level_array_ != NULL) {
     intptr_t level = context_level();
     context_level_array_->Add(deopt_id);
@@ -427,8 +423,8 @@ Definition* InlineExitCollector::JoinReturns(BlockEntryInstr** exit_block,
     // Create a join of the returns.
     intptr_t join_id = caller_graph_->max_block_id() + 1;
     caller_graph_->set_max_block_id(join_id);
-    JoinEntryInstr* join = new (Z)
-        JoinEntryInstr(join_id, try_index, Thread::Current()->GetNextDeoptId());
+    JoinEntryInstr* join = new (Z) JoinEntryInstr(
+        join_id, try_index, CompilerState::Current().GetNextDeoptId());
 
     // The dominator set of the join is the intersection of the dominator
     // sets of all the predecessors.  If we keep the dominator sets ordered
@@ -447,7 +443,7 @@ Definition* InlineExitCollector::JoinReturns(BlockEntryInstr** exit_block,
     for (intptr_t i = 0; i < num_exits; ++i) {
       // Add the control-flow edge.
       GotoInstr* goto_instr =
-          new (Z) GotoInstr(join, Thread::Current()->GetNextDeoptId());
+          new (Z) GotoInstr(join, CompilerState::Current().GetNextDeoptId());
       goto_instr->InheritDeoptTarget(zone(), ReturnAt(i));
       LastInstructionAt(i)->LinkTo(goto_instr);
       ExitBlockAt(i)->set_last_instruction(LastInstructionAt(i)->next());
@@ -533,18 +529,18 @@ void InlineExitCollector::ReplaceCall(TargetEntryInstr* callee_entry) {
     // by the constant propagation.
     TargetEntryInstr* false_block = new (Z) TargetEntryInstr(
         caller_graph_->allocate_block_id(), call_block->try_index(),
-        Thread::Current()->GetNextDeoptId());
+        CompilerState::Current().GetNextDeoptId());
     false_block->InheritDeoptTargetAfter(caller_graph_, call_, NULL);
     false_block->LinkTo(call_->next());
     call_block->ReplaceAsPredecessorWith(false_block);
 
     ConstantInstr* true_const = caller_graph_->GetConstant(Bool::True());
-    BranchInstr* branch = new (Z)
-        BranchInstr(new (Z) StrictCompareInstr(
-                        TokenPosition::kNoSource, Token::kEQ_STRICT,
-                        new (Z) Value(true_const), new (Z) Value(true_const),
-                        false, Thread::Current()->GetNextDeoptId()),
-                    Thread::Current()->GetNextDeoptId());  // No number check.
+    BranchInstr* branch = new (Z) BranchInstr(
+        new (Z) StrictCompareInstr(TokenPosition::kNoSource, Token::kEQ_STRICT,
+                                   new (Z) Value(true_const),
+                                   new (Z) Value(true_const), false,
+                                   CompilerState::Current().GetNextDeoptId()),
+        CompilerState::Current().GetNextDeoptId());  // No number check.
     branch->InheritDeoptTarget(zone(), call_);
     *branch->true_successor_address() = callee_entry;
     *branch->false_successor_address() = false_block;
@@ -945,7 +941,7 @@ BlockEntryInstr* TestGraphVisitor::CreateFalseSuccessor() const {
 
 void TestGraphVisitor::ReturnValue(Value* value) {
   Isolate* isolate = Isolate::Current();
-  if (isolate->strong() || isolate->type_checks() || isolate->asserts()) {
+  if (FLAG_strong || isolate->type_checks() || isolate->asserts()) {
     value = Bind(new (Z) AssertBooleanInstr(condition_token_pos(), value,
                                             owner()->GetNextDeoptId()));
   }
@@ -1290,7 +1286,7 @@ void EffectGraphVisitor::VisitBinaryOpNode(BinaryOpNode* node) {
     node->left()->Visit(&for_left);
     EffectGraphVisitor empty(owner());
     Isolate* isolate = Isolate::Current();
-    if (isolate->strong() || isolate->type_checks() || isolate->asserts()) {
+    if (FLAG_strong || isolate->type_checks() || isolate->asserts()) {
       ValueGraphVisitor for_right(owner());
       node->right()->Visit(&for_right);
       Value* right_value = for_right.value();
@@ -1354,7 +1350,7 @@ void ValueGraphVisitor::VisitBinaryOpNode(BinaryOpNode* node) {
     node->right()->Visit(&for_right);
     Value* right_value = for_right.value();
     Isolate* isolate = Isolate::Current();
-    if (isolate->strong() || isolate->type_checks() || isolate->asserts()) {
+    if (FLAG_strong || isolate->type_checks() || isolate->asserts()) {
       right_value = for_right.Bind(new (Z) AssertBooleanInstr(
           node->right()->token_pos(), right_value, owner()->GetNextDeoptId()));
     }
@@ -1626,7 +1622,7 @@ void EffectGraphVisitor::VisitComparisonNode(ComparisonNode* node) {
         owner()->ic_data_array(), owner()->GetNextDeoptId());
     if (node->kind() == Token::kNE) {
       Isolate* isolate = Isolate::Current();
-      if (isolate->strong() || isolate->type_checks() || isolate->asserts()) {
+      if (FLAG_strong || isolate->type_checks() || isolate->asserts()) {
         Value* value = Bind(result);
         result = new (Z) AssertBooleanInstr(node->token_pos(), value,
                                             owner()->GetNextDeoptId());
@@ -1670,7 +1666,7 @@ void EffectGraphVisitor::VisitUnaryOpNode(UnaryOpNode* node) {
     Append(for_value);
     Value* value = for_value.value();
     Isolate* isolate = Isolate::Current();
-    if (isolate->strong() || isolate->type_checks() || isolate->asserts()) {
+    if (FLAG_strong || isolate->type_checks() || isolate->asserts()) {
       value = Bind(new (Z) AssertBooleanInstr(
           node->operand()->token_pos(), value, owner()->GetNextDeoptId()));
     }
@@ -2192,7 +2188,7 @@ void EffectGraphVisitor::VisitArrayNode(ArrayNode* node) {
   {
     LocalVariable* tmp_var = EnterTempLocalScope(array_val);
     const intptr_t class_id = kArrayCid;
-    const intptr_t deopt_id = Thread::kNoDeoptId;
+    const intptr_t deopt_id = DeoptId::kNone;
     for (int i = 0; i < node->length(); ++i) {
       Value* array = Bind(new (Z) LoadLocalInstr(*tmp_var, node->token_pos()));
       Value* index = Bind(new (Z) ConstantInstr(Smi::ZoneHandle(Z, Smi::New(i)),
@@ -2748,7 +2744,7 @@ Value* EffectGraphVisitor::BuildFunctionTypeArguments(TokenPosition token_pos) {
   LocalVariable* function_type_arguments_var =
       owner()->parsed_function().function_type_arguments();
   if (function_type_arguments_var == NULL) {
-    ASSERT(!owner()->isolate()->reify_generic_functions());
+    ASSERT(!FLAG_reify_generic_functions);
     return BuildNullValue(token_pos);
   }
   return Bind(BuildLoadLocal(*function_type_arguments_var, token_pos));
@@ -3387,7 +3383,7 @@ void EffectGraphVisitor::VisitNativeBodyNode(NativeBodyNode* node) {
   const String& name = String::ZoneHandle(Z, function.native_name());
   const intptr_t num_params = function.NumParameters();
   ZoneGrowableArray<PushArgumentInstr*>* args = NULL;
-  if (function.IsGeneric() && owner()->isolate()->reify_generic_functions()) {
+  if (function.IsGeneric() && FLAG_reify_generic_functions) {
     args = new (Z) ZoneGrowableArray<PushArgumentInstr*>(1 + num_params);
     LocalVariable* type_args = pf.RawTypeArgumentsVariable();
     ASSERT(type_args != NULL);
@@ -3490,12 +3486,14 @@ void EffectGraphVisitor::VisitStoreInstanceFieldNode(
 
   if (isolate()->use_field_guards()) {
     store_value = Bind(BuildStoreExprTemp(store_value, token_pos));
-    GuardFieldClassInstr* guard_field_class = new (Z) GuardFieldClassInstr(
-        store_value, node->field(), thread()->GetNextDeoptId());
+    GuardFieldClassInstr* guard_field_class = new (Z)
+        GuardFieldClassInstr(store_value, node->field(),
+                             thread()->compiler_state().GetNextDeoptId());
     AddInstruction(guard_field_class);
     store_value = Bind(BuildLoadExprTemp(token_pos));
-    GuardFieldLengthInstr* guard_field_length = new (Z) GuardFieldLengthInstr(
-        store_value, node->field(), thread()->GetNextDeoptId());
+    GuardFieldLengthInstr* guard_field_length = new (Z)
+        GuardFieldLengthInstr(store_value, node->field(),
+                              thread()->compiler_state().GetNextDeoptId());
     AddInstruction(guard_field_length);
     store_value = Bind(BuildLoadExprTemp(token_pos));
   }
@@ -3836,7 +3834,7 @@ void EffectGraphVisitor::VisitSequenceNode(SequenceNode* node) {
   // Load the passed-in type argument vector from the temporary stack slot,
   // prepend the function type arguments of the generic parent function, and
   // store it to the final location, possibly in the context.
-  if (owner()->isolate()->reify_generic_functions() && is_top_level_sequence &&
+  if (FLAG_reify_generic_functions && is_top_level_sequence &&
       function.IsGeneric()) {
     const ParsedFunction& parsed_function = owner()->parsed_function();
     LocalVariable* type_args_var = parsed_function.function_type_arguments();
@@ -4169,8 +4167,8 @@ void EffectGraphVisitor::VisitTryCatchNode(TryCatchNode* node) {
       catch_block->token_pos(), (node->token_pos() == TokenPosition::kNoSource),
       owner()->AllocateBlockId(), catch_handler_index, owner()->graph_entry(),
       catch_block->handler_types(), try_handler_index,
-      catch_block->exception_var(), catch_block->stacktrace_var(),
       catch_block->needs_stacktrace(), owner()->GetNextDeoptId(),
+      &catch_block->exception_var(), &catch_block->stacktrace_var(),
       &catch_block->exception_var(), &catch_block->stacktrace_var());
   owner()->AddCatchEntry(catch_entry);
   AppendFragment(catch_entry, for_catch);
@@ -4216,8 +4214,8 @@ void EffectGraphVisitor::VisitTryCatchNode(TryCatchNode* node) {
         true,  // this is not a catch block from user code.
         owner()->AllocateBlockId(), original_handler_index,
         owner()->graph_entry(), types, catch_handler_index,
-        catch_block->exception_var(), catch_block->stacktrace_var(),
         catch_block->needs_stacktrace(), owner()->GetNextDeoptId(),
+        &catch_block->exception_var(), &catch_block->stacktrace_var(),
         &catch_block->exception_var(), &catch_block->stacktrace_var());
     owner()->AddCatchEntry(finally_entry);
     AppendFragment(finally_entry, for_finally);

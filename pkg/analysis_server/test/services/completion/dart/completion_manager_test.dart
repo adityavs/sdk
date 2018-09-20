@@ -52,8 +52,8 @@ part '${convertPathForImport(testFile)}';
         new CompletionPerformance());
     Completer<DartCompletionRequest> requestCompleter =
         new Completer<DartCompletionRequest>();
-    DartCompletionRequestImpl
-        .from(baseRequest, resultDescriptor: RESOLVED_UNIT1)
+    DartCompletionRequestImpl.from(baseRequest,
+            resultDescriptor: RESOLVED_UNIT1)
         .then((DartCompletionRequest request) {
       requestCompleter.complete(request);
     });

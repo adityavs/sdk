@@ -10,8 +10,9 @@ import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/diagnostics/diagnostic_listener.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/js_backend/inferred_data.dart';
+import 'package:compiler/src/js_model/element_map.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/kernel/element_map.dart';
-import 'package:compiler/src/kernel/kernel_backend_strategy.dart';
 import 'package:compiler/src/world.dart';
 import 'package:kernel/ast.dart' as ir;
 import '../equivalence/id_equivalence.dart';
@@ -21,49 +22,40 @@ main(List<String> args) {
   asyncTest(() async {
     Directory dataDir =
         new Directory.fromUri(Platform.script.resolve('side_effects'));
-    await checkTests(dataDir, computeMemberIrSideEffects,
-        args: args,
-        options: [stopAfterTypeInference],
-        skipForStrong: ['closure_call.dart']);
+    await checkTests(dataDir, const SideEffectsDataComputer(),
+        args: args, options: [stopAfterTypeInference]);
   });
 }
 
-abstract class ComputeValueMixin<T> {
-  InferredData get inferredData;
+class SideEffectsDataComputer extends DataComputer {
+  const SideEffectsDataComputer();
 
-  String getMemberValue(MemberEntity member) {
-    if (member is FunctionEntity) {
-      return inferredData.getSideEffectsOfElement(member).toString();
-    }
-    return null;
+  /// Compute side effects data for [member] from kernel based inference.
+  ///
+  /// Fills [actualMap] with the data.
+  @override
+  void computeMemberData(
+      Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
+      {bool verbose: false}) {
+    JsBackendStrategy backendStrategy = compiler.backendStrategy;
+    JsToElementMap elementMap = backendStrategy.elementMap;
+    MemberDefinition definition = elementMap.getMemberDefinition(member);
+    new SideEffectsIrComputer(
+            compiler.reporter,
+            actualMap,
+            elementMap,
+            compiler.backendClosedWorldForTesting,
+            backendStrategy.closureDataLookup,
+            compiler.globalInference.resultsForTesting.inferredData)
+        .run(definition.node);
   }
 }
 
-/// Compute side effects data for [member] from kernel based inference.
-///
-/// Fills [actualMap] with the data.
-void computeMemberIrSideEffects(
-    Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  MemberDefinition definition = elementMap.getMemberDefinition(member);
-  new SideEffectsIrComputer(
-          compiler.reporter,
-          actualMap,
-          elementMap,
-          compiler.backendClosedWorldForTesting,
-          backendStrategy.closureDataLookup as ClosureDataLookup<ir.Node>,
-          compiler.globalInference.inferredData)
-      .run(definition.node);
-}
-
 /// AST visitor for computing side effects data for a member.
-class SideEffectsIrComputer extends IrDataExtractor
-    with ComputeValueMixin<ir.Node> {
+class SideEffectsIrComputer extends IrDataExtractor {
   final JClosedWorld closedWorld;
-  final KernelToElementMapForBuilding _elementMap;
-  final ClosureDataLookup<ir.Node> _closureDataLookup;
+  final JsToElementMap _elementMap;
+  final ClosureDataLookup _closureDataLookup;
   final InferredData inferredData;
 
   SideEffectsIrComputer(
@@ -74,6 +66,13 @@ class SideEffectsIrComputer extends IrDataExtractor
       this._closureDataLookup,
       this.inferredData)
       : super(reporter, actualMap);
+
+  String getMemberValue(MemberEntity member) {
+    if (member is FunctionEntity) {
+      return inferredData.getSideEffectsOfElement(member).toString();
+    }
+    return null;
+  }
 
   @override
   String computeMemberValue(Id id, ir.Member node) {

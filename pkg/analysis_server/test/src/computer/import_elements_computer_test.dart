@@ -34,19 +34,22 @@ class ImportElementsComputerTest extends AbstractContextTest {
   }
 
   void assertNoChanges() {
-    expect(sourceFileEdit.edits, isEmpty);
+    expect(sourceFileEdit, isNull);
   }
 
-  Future<Null> computeChanges(List<ImportedElements> importedElements) async {
+  Future<void> computeChanges(List<ImportedElements> importedElements) async {
     SourceChange change = await computer.createEdits(importedElements);
     expect(change, isNotNull);
     List<SourceFileEdit> edits = change.edits;
-    expect(edits, hasLength(1));
-    sourceFileEdit = edits[0];
-    expect(sourceFileEdit, isNotNull);
+    if (edits.length == 1) {
+      sourceFileEdit = edits[0];
+      expect(sourceFileEdit, isNotNull);
+    } else {
+      sourceFileEdit = null;
+    }
   }
 
-  Future<Null> createBuilder(String content) async {
+  Future<void> createBuilder(String content) async {
     originalContent = content;
     newFile(path, content: content);
     AnalysisResult result = await driver.getResult(path);

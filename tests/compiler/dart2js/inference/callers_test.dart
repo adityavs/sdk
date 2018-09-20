@@ -9,26 +9,52 @@ import 'package:compiler/src/common.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/diagnostics/diagnostic_listener.dart';
 import 'package:compiler/src/elements/entities.dart';
-import 'package:compiler/src/inferrer/inferrer_engine.dart';
 import 'package:compiler/src/inferrer/type_graph_inferrer.dart';
+import 'package:compiler/src/js_model/element_map.dart';
+import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/kernel/element_map.dart';
-import 'package:compiler/src/kernel/kernel_backend_strategy.dart';
 import 'package:kernel/ast.dart' as ir;
 import '../equivalence/id_equivalence.dart';
 import '../equivalence/id_equivalence_helper.dart';
 
 main(List<String> args) {
-  InferrerEngineImpl.retainDataForTesting = true;
   asyncTest(() async {
     Directory dataDir =
         new Directory.fromUri(Platform.script.resolve('callers'));
-    await checkTests(dataDir, computeMemberIrCallers,
+    await checkTests(dataDir, const CallersDataComputer(),
         args: args, options: [stopAfterTypeInference]);
   });
 }
 
-abstract class ComputeValueMixin<T> {
-  TypeGraphInferrer get inferrer;
+class CallersDataComputer extends DataComputer {
+  const CallersDataComputer();
+
+  @override
+  void computeMemberData(
+      Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
+      {bool verbose: false}) {
+    JsBackendStrategy backendStrategy = compiler.backendStrategy;
+    JsToElementMap elementMap = backendStrategy.elementMap;
+    MemberDefinition definition = elementMap.getMemberDefinition(member);
+    new CallersIrComputer(
+            compiler.reporter,
+            actualMap,
+            elementMap,
+            compiler.globalInference.typesInferrerInternal,
+            backendStrategy.closureDataLookup)
+        .run(definition.node);
+  }
+}
+
+/// AST visitor for computing side effects data for a member.
+class CallersIrComputer extends IrDataExtractor {
+  final TypeGraphInferrer inferrer;
+  final JsToElementMap _elementMap;
+  final ClosureDataLookup _closureDataLookup;
+
+  CallersIrComputer(DiagnosticReporter reporter, Map<Id, ActualData> actualMap,
+      this._elementMap, this.inferrer, this._closureDataLookup)
+      : super(reporter, actualMap);
 
   String getMemberValue(MemberEntity member) {
     Iterable<MemberEntity> callers = inferrer.getCallersOfForTesting(member);
@@ -50,36 +76,6 @@ abstract class ComputeValueMixin<T> {
     }
     return null;
   }
-}
-
-/// Compute callers data for [member] from kernel based inference.
-///
-/// Fills [actualMap] with the data.
-void computeMemberIrCallers(
-    Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
-    {bool verbose: false}) {
-  KernelBackendStrategy backendStrategy = compiler.backendStrategy;
-  KernelToElementMapForBuilding elementMap = backendStrategy.elementMap;
-  MemberDefinition definition = elementMap.getMemberDefinition(member);
-  new CallersIrComputer(
-          compiler.reporter,
-          actualMap,
-          elementMap,
-          compiler.globalInference.typesInferrerInternal,
-          backendStrategy.closureDataLookup as ClosureDataLookup<ir.Node>)
-      .run(definition.node);
-}
-
-/// AST visitor for computing side effects data for a member.
-class CallersIrComputer extends IrDataExtractor
-    with ComputeValueMixin<ir.Node> {
-  final TypeGraphInferrer inferrer;
-  final KernelToElementMapForBuilding _elementMap;
-  final ClosureDataLookup<ir.Node> _closureDataLookup;
-
-  CallersIrComputer(DiagnosticReporter reporter, Map<Id, ActualData> actualMap,
-      this._elementMap, this.inferrer, this._closureDataLookup)
-      : super(reporter, actualMap);
 
   @override
   String computeMemberValue(Id id, ir.Member node) {

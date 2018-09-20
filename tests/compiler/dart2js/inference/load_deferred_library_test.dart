@@ -9,13 +9,14 @@ import 'package:compiler/src/common/names.dart';
 import 'package:compiler/src/compiler.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/inferrer/typemasks/masks.dart';
+import 'package:compiler/src/js_model/element_map.dart';
 import 'package:compiler/src/js_model/js_strategy.dart';
 import 'package:compiler/src/kernel/element_map.dart';
 import 'package:compiler/src/types/abstract_value_domain.dart';
 import 'package:compiler/src/world.dart';
 import 'package:expect/expect.dart';
 import 'package:kernel/ast.dart' as ir;
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 
 const String source = '''
 import 'package:expect/expect.dart' deferred as expect;
@@ -29,14 +30,10 @@ callLoadLibrary() => expect.loadLibrary();
 
 main() async {
   asyncTest(() async {
-    print('--test Dart 1 ----------------------------------------------------');
-    await runTest([Flags.noPreviewDart2], trust: false);
-    print('--test Dart 1 --trust-type-annotations ---------------------------');
-    await runTest([Flags.noPreviewDart2, Flags.trustTypeAnnotations]);
     print('--test Dart 2 ----------------------------------------------------');
-    await runTest([Flags.strongMode], trust: false);
+    await runTest([], trust: false);
     print('--test Dart 2 --omit-implicit-checks -----------------------------');
-    await runTest([Flags.strongMode, Flags.omitImplicitChecks]);
+    await runTest([Flags.omitImplicitChecks]);
   });
 }
 
@@ -60,10 +57,9 @@ runTest(List<String> options, {bool trust: true}) async {
   MemberDefinition definition =
       backendStrategy.elementMap.getMemberDefinition(loadDeferredLibrary);
   ir.Procedure procedure = definition.node;
-  typeMask = compiler.globalInference.results
-      .resultOfParameter(localsMap
-          .getLocalVariable(procedure.function.positionalParameters.first))
-      .type;
+  typeMask = compiler.globalInference.resultsForTesting.resultOfParameter(
+      localsMap
+          .getLocalVariable(procedure.function.positionalParameters.first));
 
   if (trust) {
     Expect.equals(

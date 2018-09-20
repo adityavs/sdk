@@ -46,6 +46,7 @@ class IOHandle : public ReferenceCounted<IOHandle> {
   intptr_t Read(void* buffer, intptr_t num_bytes);
   intptr_t Write(const void* buffer, intptr_t num_bytes);
   intptr_t Accept(struct sockaddr* addr, socklen_t* addrlen);
+  intptr_t AvailableBytes();
 
   // Called from the EventHandler thread.
   void Close();
@@ -73,6 +74,10 @@ class IOHandle : public ReferenceCounted<IOHandle> {
   Mutex* mutex_;
   bool write_events_enabled_;
   bool read_events_enabled_;
+  // Bytes remaining to be read from the socket. Read events should only be
+  // re-enabled when this drops to zero.
+  intptr_t available_bytes_;
+
   // TODO(zra): Add flag to enable/disable peer closed signal?
   intptr_t fd_;
   zx_handle_t handle_;
@@ -158,7 +163,7 @@ class EventHandlerImplementation {
   intptr_t GetPollEvents(intptr_t events);
   void HandleInterrupt(InterruptMessage* msg);
 
-  HashMap socket_map_;
+  SimpleHashMap socket_map_;
   TimeoutQueue timeout_queue_;
   bool shutdown_;
   zx_handle_t port_handle_;

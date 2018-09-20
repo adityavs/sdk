@@ -498,13 +498,13 @@ class _IndexContributor extends GeneralizingAstVisitor {
 
   @override
   visitAssignmentExpression(AssignmentExpression node) {
-    recordOperatorReference(node.operator, node.bestElement);
+    recordOperatorReference(node.operator, node.staticElement);
     super.visitAssignmentExpression(node);
   }
 
   @override
   visitBinaryExpression(BinaryExpression node) {
-    recordOperatorReference(node.operator, node.bestElement);
+    recordOperatorReference(node.operator, node.staticElement);
     super.visitBinaryExpression(node);
   }
 
@@ -519,14 +519,14 @@ class _IndexContributor extends GeneralizingAstVisitor {
       recordRelationOffset(objectElement, IndexRelationKind.IS_EXTENDED_BY,
           node.name.offset, 0, true);
     }
-    recordIsAncestorOf(node.element);
+    recordIsAncestorOf(node.declaredElement);
     super.visitClassDeclaration(node);
   }
 
   @override
   visitClassTypeAlias(ClassTypeAlias node) {
     _addSubtypeForClassTypeAlis(node);
-    recordIsAncestorOf(node.element);
+    recordIsAncestorOf(node.declaredElement);
     super.visitClassTypeAlias(node);
   }
 
@@ -559,6 +559,13 @@ class _IndexContributor extends GeneralizingAstVisitor {
   }
 
   @override
+  visitExportDirective(ExportDirective node) {
+    ExportElement element = node.element;
+    recordUriReference(element?.exportedLibrary, node);
+    super.visitExportDirective(node);
+  }
+
+  @override
   visitExpression(Expression node) {
     ParameterElement parameterElement = node.staticParameterElement;
     if (parameterElement != null && parameterElement.isOptionalPositional) {
@@ -566,13 +573,6 @@ class _IndexContributor extends GeneralizingAstVisitor {
           node.offset, 0, true);
     }
     super.visitExpression(node);
-  }
-
-  @override
-  visitExportDirective(ExportDirective node) {
-    ExportElement element = node.element;
-    recordUriReference(element?.exportedLibrary, node);
-    super.visitExportDirective(node);
   }
 
   @override
@@ -596,7 +596,7 @@ class _IndexContributor extends GeneralizingAstVisitor {
 
   @override
   visitIndexExpression(IndexExpression node) {
-    MethodElement element = node.bestElement;
+    MethodElement element = node.staticElement;
     if (element is MethodElement) {
       Token operator = node.leftBracket;
       recordRelationToken(element, IndexRelationKind.IS_INVOKED_BY, operator);
@@ -610,7 +610,7 @@ class _IndexContributor extends GeneralizingAstVisitor {
   @override
   visitMethodInvocation(MethodInvocation node) {
     SimpleIdentifier name = node.methodName;
-    Element element = name.bestElement;
+    Element element = name.staticElement;
     // unresolved name invocation
     bool isQualified = node.realTarget != null;
     if (element == null) {
@@ -627,6 +627,20 @@ class _IndexContributor extends GeneralizingAstVisitor {
   }
 
   @override
+  visitMixinDeclaration(MixinDeclaration node) {
+    _addSubtypeForMixinDeclaration(node);
+    recordIsAncestorOf(node.declaredElement);
+    super.visitMixinDeclaration(node);
+  }
+
+  @override
+  visitOnClause(OnClause node) {
+    for (TypeName typeName in node.superclassConstraints) {
+      recordSuperType(typeName, IndexRelationKind.IS_IMPLEMENTED_BY);
+    }
+  }
+
+  @override
   visitPartDirective(PartDirective node) {
     CompilationUnitElement element = node.element;
     if (element?.source != null) {
@@ -637,13 +651,13 @@ class _IndexContributor extends GeneralizingAstVisitor {
 
   @override
   visitPostfixExpression(PostfixExpression node) {
-    recordOperatorReference(node.operator, node.bestElement);
+    recordOperatorReference(node.operator, node.staticElement);
     super.visitPostfixExpression(node);
   }
 
   @override
   visitPrefixExpression(PrefixExpression node) {
-    recordOperatorReference(node.operator, node.bestElement);
+    recordOperatorReference(node.operator, node.staticElement);
     super.visitPrefixExpression(node);
   }
 
@@ -669,7 +683,7 @@ class _IndexContributor extends GeneralizingAstVisitor {
     if (node.inDeclarationContext()) {
       return;
     }
-    Element element = node.bestElement;
+    Element element = node.staticElement;
     // record unresolved name reference
     bool isQualified = _isQualified(node);
     if (element == null) {
@@ -740,8 +754,12 @@ class _IndexContributor extends GeneralizingAstVisitor {
   /**
    * Record the given class as a subclass of its direct superclasses.
    */
-  void _addSubtype(String name, TypeName superclass, WithClause withClause,
-      ImplementsClause implementsClause, List<ClassMember> memberNodes) {
+  void _addSubtype(String name,
+      {TypeName superclass,
+      WithClause withClause,
+      OnClause onClause,
+      ImplementsClause implementsClause,
+      List<ClassMember> memberNodes}) {
     List<String> supertypes = [];
     List<String> members = [];
 
@@ -763,6 +781,7 @@ class _IndexContributor extends GeneralizingAstVisitor {
 
     addSupertype(superclass);
     withClause?.mixinTypes?.forEach(addSupertype);
+    onClause?.superclassConstraints?.forEach(addSupertype);
     implementsClause?.interfaces?.forEach(addSupertype);
 
     void addMemberName(SimpleIdentifier identifier) {
@@ -795,16 +814,32 @@ class _IndexContributor extends GeneralizingAstVisitor {
    * Record the given class as a subclass of its direct superclasses.
    */
   void _addSubtypeForClassDeclaration(ClassDeclaration node) {
-    _addSubtype(node.name.name, node.extendsClause?.superclass, node.withClause,
-        node.implementsClause, node.members);
+    _addSubtype(node.name.name,
+        superclass: node.extendsClause?.superclass,
+        withClause: node.withClause,
+        implementsClause: node.implementsClause,
+        memberNodes: node.members);
   }
 
   /**
    * Record the given class as a subclass of its direct superclasses.
    */
   void _addSubtypeForClassTypeAlis(ClassTypeAlias node) {
-    _addSubtype(node.name.name, node.superclass, node.withClause,
-        node.implementsClause, const []);
+    _addSubtype(node.name.name,
+        superclass: node.superclass,
+        withClause: node.withClause,
+        implementsClause: node.implementsClause,
+        memberNodes: const []);
+  }
+
+  /**
+   * Record the given mixin as a subclass of its direct superclasses.
+   */
+  void _addSubtypeForMixinDeclaration(MixinDeclaration node) {
+    _addSubtype(node.name.name,
+        onClause: node.onClause,
+        implementsClause: node.implementsClause,
+        memberNodes: node.members);
   }
 
   /**
@@ -863,6 +898,9 @@ class _IndexContributor extends GeneralizingAstVisitor {
     }
     for (InterfaceType mixinType in ancestor.mixins) {
       _recordIsAncestorOf(descendant, mixinType.element, true, visitedElements);
+    }
+    for (InterfaceType type in ancestor.superclassConstraints) {
+      _recordIsAncestorOf(descendant, type.element, true, visitedElements);
     }
     for (InterfaceType implementedType in ancestor.interfaces) {
       _recordIsAncestorOf(

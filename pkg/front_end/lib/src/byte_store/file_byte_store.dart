@@ -7,9 +7,10 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
-import 'package:front_end/src/byte_store/byte_store.dart';
-import 'package:front_end/src/byte_store/crc32.dart';
 import 'package:path/path.dart';
+
+import 'byte_store.dart';
+import 'fletcher16.dart';
 
 /**
  * The request that is sent from the main isolate to the clean-up isolate.
@@ -46,9 +47,7 @@ class EvictingFileByteStore implements ByteStore {
   }
 
   @override
-  List<int> get(String key) {
-    return _fileByteStore.get(key);
-  }
+  List<int> get(String key) => _fileByteStore.get(key);
 
   @override
   void put(String key, List<int> bytes) {
@@ -97,16 +96,16 @@ class EvictingFileByteStore implements ByteStore {
     SendPort initialReplyTo = message;
     ReceivePort port = new ReceivePort();
     initialReplyTo.send(port.sendPort);
-    port.listen((request) async {
+    port.listen((request) {
       if (request is CacheCleanUpRequest) {
-        await _cleanUpFolder(request.cachePath, request.maxSizeBytes);
+        _cleanUpFolder(request.cachePath, request.maxSizeBytes);
         // Let the client know that we're done.
         request.replyTo.send(true);
       }
     });
   }
 
-  static Future<Null> _cleanUpFolder(String cachePath, int maxSizeBytes) async {
+  static void _cleanUpFolder(String cachePath, int maxSizeBytes) {
     // Prepare the list of files and their statistics.
     List<File> files = <File>[];
     Map<File, FileStat> fileStatMap = {};
@@ -115,10 +114,14 @@ class EvictingFileByteStore implements ByteStore {
     for (FileSystemEntity resource in resources) {
       if (resource is File) {
         try {
-          FileStat fileStat = await resource.stat();
-          files.add(resource);
-          fileStatMap[resource] = fileStat;
-          currentSizeBytes += fileStat.size;
+          final FileStat fileStat = resource.statSync();
+          // Make sure that the file was not deleted out from under us (a return
+          // value of FileSystemEntityType.notFound).
+          if (fileStat.type == FileSystemEntityType.file) {
+            files.add(resource);
+            fileStatMap[resource] = fileStat;
+            currentSizeBytes += fileStat.size;
+          }
         } catch (_) {}
       }
     }
@@ -133,7 +136,7 @@ class EvictingFileByteStore implements ByteStore {
         break;
       }
       try {
-        await file.delete();
+        file.deleteSync();
       } catch (_) {}
       currentSizeBytes -= fileStatMap[file].size;
     }
@@ -144,81 +147,96 @@ class EvictingFileByteStore implements ByteStore {
  * [ByteStore] that stores values as files.
  */
 class FileByteStore implements ByteStore {
+  static final FileByteStoreValidator _validator = new FileByteStoreValidator();
+
   final String _cachePath;
-  final String _tempName;
-  final FileByteStoreValidator _validator = new FileByteStoreValidator();
+  final String _tempSuffix;
+  final Map<String, List<int>> _writeInProgress = {};
+  final FuturePool _pool = new FuturePool(20);
 
   /**
    * If the same cache path is used from more than one isolate of the same
    * process, then a unique [tempNameSuffix] must be provided for each isolate.
    */
   FileByteStore(this._cachePath, {String tempNameSuffix: ''})
-      : _tempName = 'temp_${pid}_${tempNameSuffix}';
+      : _tempSuffix =
+            '-temp-${pid}${tempNameSuffix.isEmpty ? '' : '-$tempNameSuffix'}';
 
   @override
   List<int> get(String key) {
+    List<int> bytes = _writeInProgress[key];
+    if (bytes != null) {
+      return bytes;
+    }
+
     try {
-      File file = _getFileForKey(key);
-      List<int> rawBytes = file.readAsBytesSync();
-      return _validator.getData(rawBytes);
+      final File file = _getFileForKey(key);
+      if (!file.existsSync()) {
+        return null;
+      }
+      return _validator.getData(file.readAsBytesSync());
     } catch (_) {
+      // ignore exceptions
       return null;
     }
   }
 
   @override
   void put(String key, List<int> bytes) {
-    try {
-      bytes = _validator.wrapData(bytes);
-      File tempFile = _getFileForKey(_tempName);
-      tempFile.writeAsBytesSync(bytes);
-      File file = _getFileForKey(key);
-      tempFile.renameSync(file.path);
-    } catch (_) {}
+    _writeInProgress[key] = bytes;
+
+    final List<int> wrappedBytes = _validator.wrapData(bytes);
+
+    // We don't wait for the write and rename to complete.
+    _pool.execute(() {
+      final File tempFile = _getFileForKey('$key$_tempSuffix');
+      return tempFile.writeAsBytes(wrappedBytes).then((_) {
+        return tempFile.rename(join(_cachePath, key));
+      }).catchError((_) {
+        // ignore exceptions
+      }).whenComplete(() {
+        if (_writeInProgress[key] == bytes) {
+          _writeInProgress.remove(key);
+        }
+      });
+    });
   }
 
-  File _getFileForKey(String key) {
-    return new File(join(_cachePath, key));
-  }
+  File _getFileForKey(String key) => new File(join(_cachePath, key));
 }
 
 /**
- * Generally speaking, we cannot guarantee that any data written into a
- * file will stay the same - there is always a chance of a hardware problem,
- * file system problem, truncated data, etc.
+ * Generally speaking, we cannot guarantee that any data written into a file
+ * will stay the same - there is always a chance of a hardware problem, file
+ * system problem, truncated data, etc.
  *
- * So, we need to embed some validation into data itself.
- * This class append the version and the checksum to data.
+ * So, we need to embed some validation into data itself. This class append the
+ * version and the checksum to data.
  */
 class FileByteStoreValidator {
-  static const List<int> _VERSION = const [0x01, 0x00, 0x00, 0x00];
+  static const List<int> _VERSION = const [0x01, 0x00];
 
   /**
    * If the [rawBytes] have the valid version and checksum, extract and
-   * return the data from it.  Otherwise return `null`.
+   * return the data from it. Otherwise return `null`.
    */
   List<int> getData(List<int> rawBytes) {
     // There must be at least the version and the checksum in the raw bytes.
-    if (rawBytes.length < 8) {
+    if (rawBytes.length < 4) {
       return null;
     }
-    int len = rawBytes.length - 8;
+    int len = rawBytes.length - 4;
 
     // Check the version.
-    if (rawBytes[len + 0] != _VERSION[0] ||
-        rawBytes[len + 1] != _VERSION[1] ||
-        rawBytes[len + 2] != _VERSION[2] ||
-        rawBytes[len + 3] != _VERSION[3]) {
+    if (rawBytes[len + 0] != _VERSION[0] || rawBytes[len + 1] != _VERSION[1]) {
       return null;
     }
 
-    // Check the CRC32 of the data.
+    // Check the checksum of the data.
     List<int> data = rawBytes.sublist(0, len);
-    int crc = getCrc32(data);
-    if (rawBytes[len + 4] != crc & 0xFF ||
-        rawBytes[len + 5] != (crc >> 8) & 0xFF ||
-        rawBytes[len + 6] != (crc >> 16) & 0xFF ||
-        rawBytes[len + 7] != (crc >> 24) & 0xFF) {
+    int checksum = fletcher16(data);
+    if (rawBytes[len + 2] != checksum & 0xFF ||
+        rawBytes[len + 3] != (checksum >> 8) & 0xFF) {
       return null;
     }
 
@@ -232,7 +250,7 @@ class FileByteStoreValidator {
    */
   List<int> wrapData(List<int> data) {
     int len = data.length;
-    var bytes = new Uint8List(len + 8);
+    var bytes = new Uint8List(len + 4);
 
     // Put the data.
     bytes.setRange(0, len, data);
@@ -240,16 +258,39 @@ class FileByteStoreValidator {
     // Put the version.
     bytes[len + 0] = _VERSION[0];
     bytes[len + 1] = _VERSION[1];
-    bytes[len + 2] = _VERSION[2];
-    bytes[len + 3] = _VERSION[3];
 
-    // Put the CRC32 of the data.
-    int crc = getCrc32(data);
-    bytes[len + 4] = crc & 0xFF;
-    bytes[len + 5] = (crc >> 8) & 0xFF;
-    bytes[len + 6] = (crc >> 16) & 0xFF;
-    bytes[len + 7] = (crc >> 24) & 0xFF;
+    // Put the checksum of the data.
+    int checksum = fletcher16(data);
+    bytes[len + 2] = checksum & 0xFF;
+    bytes[len + 3] = (checksum >> 8) & 0xFF;
 
     return bytes;
+  }
+}
+
+class FuturePool {
+  int _available;
+  List waiting = [];
+
+  FuturePool(this._available);
+
+  void execute(Future Function() fn) {
+    if (_available > 0) {
+      _run(fn);
+    } else {
+      waiting.add(fn);
+    }
+  }
+
+  void _run(Future Function() fn) {
+    _available--;
+
+    fn().whenComplete(() {
+      _available++;
+
+      if (waiting.isNotEmpty) {
+        _run(waiting.removeAt(0));
+      }
+    });
   }
 }

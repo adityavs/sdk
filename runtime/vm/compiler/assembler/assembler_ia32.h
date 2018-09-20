@@ -223,12 +223,16 @@ class FieldAddress : public Address {
 
 class Assembler : public ValueObject {
  public:
-  explicit Assembler(bool use_far_branches = false)
+  explicit Assembler(ObjectPoolWrapper* object_pool_wrapper,
+                     bool use_far_branches = false)
       : buffer_(),
         prologue_offset_(-1),
         jit_cookie_(0),
         comments_(),
         code_(Code::ZoneHandle()) {
+    // On ia32 we don't use object pools.
+    USE(object_pool_wrapper);
+
     // This mode is only needed and implemented for ARM.
     ASSERT(!use_far_branches);
   }
@@ -601,6 +605,12 @@ class Assembler : public ValueObject {
     kValueCanBeSmi,
   };
 
+  // Store into a heap object and apply the generational write barrier. (Unlike
+  // the other architectures, this does not apply the incremental write barrier,
+  // and so concurrent marking is not enabled for now on IA32.) All stores into
+  // heap objects must pass through this function or, if the value can be proven
+  // either Smi or old-and-premarked, its NoBarrier variants.
+  // Destroys the value register.
   void StoreIntoObject(Register object,      // Object we are storing into.
                        const Address& dest,  // Where we are storing into.
                        Register value,       // Value we are storing.
@@ -672,13 +682,15 @@ class Assembler : public ValueObject {
                                            intptr_t cid,
                                            intptr_t index_scale,
                                            Register array,
-                                           intptr_t index);
+                                           intptr_t index,
+                                           intptr_t extra_disp = 0);
 
   static Address ElementAddressForRegIndex(bool is_external,
                                            intptr_t cid,
                                            intptr_t index_scale,
                                            Register array,
-                                           Register index);
+                                           Register index,
+                                           intptr_t extra_disp = 0);
 
   static Address VMTagAddress() {
     return Address(THR, Thread::vm_tag_offset());

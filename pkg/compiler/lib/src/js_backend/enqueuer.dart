@@ -31,8 +31,6 @@ import '../util/util.dart' show Setlet;
 /// [Enqueuer] which is specific to code generation.
 class CodegenEnqueuer extends EnqueuerImpl {
   final String name;
-  final EnqueuerStrategy strategy;
-
   Set<ClassEntity> _recentClasses = new Setlet<ClassEntity>();
   bool _recentConstants = false;
   final CodegenWorldBuilderImpl _worldBuilder;
@@ -57,7 +55,7 @@ class CodegenEnqueuer extends EnqueuerImpl {
   static const ImpactUseCase IMPACT_USE =
       const ImpactUseCase('CodegenEnqueuer');
 
-  CodegenEnqueuer(this.task, this._options, this.strategy, this._worldBuilder,
+  CodegenEnqueuer(this.task, this._options, this._worldBuilder,
       this._workItemBuilder, this.listener)
       : this.name = 'codegen enqueuer' {
     _impactVisitor = new EnqueuerImplImpactVisitor(this);
@@ -100,17 +98,16 @@ class CodegenEnqueuer extends EnqueuerImpl {
   }
 
   void _registerInstantiatedType(InterfaceType type,
-      {bool mirrorUsage: false, bool nativeUsage: false}) {
+      {bool nativeUsage: false}) {
     task.measure(() {
-      _worldBuilder.registerTypeInstantiation(type, _applyClassUse,
-          byMirrors: mirrorUsage);
+      _worldBuilder.registerTypeInstantiation(type, _applyClassUse);
       listener.registerInstantiatedType(type, nativeUsage: nativeUsage);
     });
   }
 
   bool checkNoEnqueuedInvokedInstanceMethods(
       ElementEnvironment elementEnvironment) {
-    return strategy.checkEnqueuerConsistency(this, elementEnvironment);
+    return checkEnqueuerConsistency(elementEnvironment);
   }
 
   void checkClass(ClassEntity cls) {
@@ -179,9 +176,6 @@ class CodegenEnqueuer extends EnqueuerImpl {
       case TypeUseKind.INSTANTIATION:
         _registerInstantiatedType(type);
         break;
-      case TypeUseKind.MIRROR_INSTANTIATION:
-        _registerInstantiatedType(type, mirrorUsage: true);
-        break;
       case TypeUseKind.NATIVE_INSTANTIATION:
         _registerInstantiatedType(type, nativeUsage: true);
         break;
@@ -200,15 +194,16 @@ class CodegenEnqueuer extends EnqueuerImpl {
           _registerIsCheck(type);
         }
         break;
-      case TypeUseKind.CHECKED_MODE_CHECK:
-        if (_options.assignmentCheckPolicy.isEmitted) {
-          _registerIsCheck(type);
-        }
-        break;
       case TypeUseKind.TYPE_LITERAL:
         if (type is TypeVariableType) {
           _worldBuilder.registerTypeVariableTypeLiteral(type);
         }
+        break;
+      case TypeUseKind.RTI_VALUE:
+        _worldBuilder.registerConstTypeLiteral(type);
+        break;
+      case TypeUseKind.TYPE_ARGUMENT:
+        _worldBuilder.registerTypeArgument(type);
         break;
     }
   }
@@ -238,7 +233,7 @@ class CodegenEnqueuer extends EnqueuerImpl {
         // TODO(johnniwinther): Find an optimal process order.
         WorkItem work = _queue.removeLast();
         if (!_processedEntities.contains(work.element)) {
-          strategy.processWorkItem(f, work);
+          f(work);
           // TODO(johnniwinther): Register the processed element here. This
           // is currently a side-effect of calling `work.run`.
           _processedEntities.add(work.element);

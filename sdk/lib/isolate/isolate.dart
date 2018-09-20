@@ -26,6 +26,7 @@ part "capability.dart";
 class IsolateSpawnException implements Exception {
   /** Error message reported by the spawn operation. */
   final String message;
+  @pragma("vm:entry-point")
   IsolateSpawnException(this.message);
   String toString() => "IsolateSpawnException: $message";
 }
@@ -70,12 +71,8 @@ class IsolateSpawnException implements Exception {
 class Isolate {
   /** Argument to `ping` and `kill`: Ask for immediate action. */
   static const int immediate = 0;
-  @Deprecated("Use immediate instead")
-  static const int IMMEDIATE = immediate;
   /** Argument to `ping` and `kill`: Ask for action before the next event. */
   static const int beforeNextEvent = 1;
-  @Deprecated("Use beforeNextEvent instead")
-  static const int BEFORE_NEXT_EVENT = beforeNextEvent;
 
   /**
    * Control port used to send control messages to the isolate.

@@ -40,7 +40,7 @@ class InheritedReferenceContributor extends Object
    * call on `computeSuggestionsForClass`.
    */
   @override
-  Future<Null> computeSuggestions(
+  Future<void> computeSuggestions(
       DartCompletionRequest request, CompletionCollector collector) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
@@ -51,7 +51,7 @@ class InheritedReferenceContributor extends Object
       return;
     }
     ClassDeclaration classDecl = _enclosingClass(target);
-    if (classDecl == null || classDecl.element == null) {
+    if (classDecl == null || classDecl.declaredElement == null) {
       return;
     }
     containingLibrary = request.result.libraryElement;
@@ -62,7 +62,7 @@ class InheritedReferenceContributor extends Object
   /**
    * Clients should not overload this function.
    */
-  Future<Null> computeSuggestionsForClass(
+  Future<void> computeSuggestionsForClass(
     DartCompletionRequest request,
     CompletionCollector collector,
     ClassElement classElement, {
@@ -82,7 +82,7 @@ class InheritedReferenceContributor extends Object
     }
     if (classElement == null) {
       ClassDeclaration classDecl = _enclosingClass(target);
-      if (classDecl == null || classDecl.element == null) {
+      if (classDecl == null || classDecl.declaredElement == null) {
         return;
       }
       classElement = resolutionMap.elementDeclaredByClassDeclaration(classDecl);

@@ -7,8 +7,6 @@ import '../ast.dart';
 import '../class_hierarchy.dart';
 import '../core_types.dart';
 import '../transformations/treeshaker.dart' show ProgramRoot;
-import 'flutter.dart' show FlutterTarget;
-import 'vm.dart' show VmTarget;
 
 final List<String> targetNames = targets.keys.toList();
 
@@ -33,8 +31,6 @@ typedef Target _TargetBuilder(TargetFlags flags);
 
 final Map<String, _TargetBuilder> targets = <String, _TargetBuilder>{
   'none': (TargetFlags flags) => new NoneTarget(flags),
-  'vm': (TargetFlags flags) => new VmTarget(flags),
-  'flutter': (TargetFlags flags) => new FlutterTarget(flags),
 };
 
 Target getTarget(String name, TargetFlags flags) {
@@ -107,46 +103,9 @@ abstract class Target {
   /// slowing down compilation.
   void performOutlineTransformations(Component component) {}
 
-  /// Perform target-specific modular transformations on the given component.
-  ///
-  /// These transformations should not be whole-component transformations.  They
-  /// should expect that the component will contain external libraries.
-  void performModularTransformationsOnComponent(
-      CoreTypes coreTypes, ClassHierarchy hierarchy, Component component,
-      {void logger(String msg)}) {
-    performModularTransformationsOnLibraries(
-        coreTypes, hierarchy, component.libraries,
-        logger: logger);
-  }
-
   /// Perform target-specific modular transformations on the given libraries.
-  ///
-  /// The intent of this method is to perform the transformations only on some
-  /// subset of the component libraries and avoid packing them into a temporary
-  /// [Component] instance to pass into [performModularTransformationsOnComponent].
-  ///
-  /// Note that the following should be equivalent:
-  ///
-  ///     target.performModularTransformationsOnComponent(coreTypes, component);
-  ///
-  /// and
-  ///
-  ///     target.performModularTransformationsOnLibraries(
-  ///         coreTypes, component.libraries);
-  void performModularTransformationsOnLibraries(
+  void performModularTransformationsOnLibraries(Component component,
       CoreTypes coreTypes, ClassHierarchy hierarchy, List<Library> libraries,
-      {void logger(String msg)});
-
-  /// Perform target-specific whole-program transformations.
-  ///
-  /// These transformations should be optimizations and not required for
-  /// correctness.  Everything should work if a simple and fast linker chooses
-  /// not to apply these transformations.
-  ///
-  /// Note that [performGlobalTransformations] doesn't have -OnComponent and
-  /// -OnLibraries alternatives, because the global knowledge required by the
-  /// transformations is assumed to be retrieved from a [Component] instance.
-  void performGlobalTransformations(CoreTypes coreTypes, Component component,
       {void logger(String msg)});
 
   /// Perform target-specific modular transformations on the given program.
@@ -168,7 +127,7 @@ abstract class Target {
 
   /// Whether a library is allowed to import a platform private library.
   ///
-  /// By default only `dart:*` libraries are allowed. May be overriden for
+  /// By default only `dart:*` libraries are allowed. May be overridden for
   /// testing purposes.
   bool allowPlatformPrivateLibraryAccess(Uri importer, Uri imported) =>
       imported.scheme != "dart" ||
@@ -230,7 +189,17 @@ abstract class Target {
     return new InvalidExpression(message)..fileOffset = offset;
   }
 
+  /// Configure the given [Component] in a target specific way.
+  /// Returns the configured component.
+  Component configureComponent(Component component) => component;
+
   String toString() => 'Target($name)';
+
+  Class concreteListLiteralClass(CoreTypes coreTypes) => null;
+  Class concreteConstListLiteralClass(CoreTypes coreTypes) => null;
+
+  Class concreteMapLiteralClass(CoreTypes coreTypes) => null;
+  Class concreteConstMapLiteralClass(CoreTypes coreTypes) => null;
 }
 
 class NoneTarget extends Target {
@@ -241,10 +210,8 @@ class NoneTarget extends Target {
   bool get strongMode => flags.strongMode;
   String get name => 'none';
   List<String> get extraRequiredLibraries => <String>[];
-  void performModularTransformationsOnLibraries(
+  void performModularTransformationsOnLibraries(Component component,
       CoreTypes coreTypes, ClassHierarchy hierarchy, List<Library> libraries,
-      {void logger(String msg)}) {}
-  void performGlobalTransformations(CoreTypes coreTypes, Component component,
       {void logger(String msg)}) {}
 
   @override

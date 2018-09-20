@@ -24,7 +24,7 @@ class StaticMemberContributor extends DartCompletionContributor {
     await null;
     Expression targetId = request.dotTarget;
     if (targetId is Identifier && !request.target.isCascade) {
-      Element elem = targetId.bestElement;
+      Element elem = targetId.staticElement;
       if (elem is ClassElement) {
         LibraryElement containingLibrary = request.libraryElement;
         // Gracefully degrade if the library could not be determined
@@ -66,9 +66,7 @@ class _SuggestionBuilder extends GeneralizingElementVisitor {
 
   @override
   visitConstructorElement(ConstructorElement element) {
-    if (element.context.analysisOptions.previewDart2) {
-      _addSuggestion(element);
-    }
+    _addSuggestion(element);
   }
 
   @override

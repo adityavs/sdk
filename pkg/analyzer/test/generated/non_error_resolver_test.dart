@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-library analyzer.test.generated.non_error_resolver_test;
-
 import 'dart:async';
 
 import 'package:analyzer/dart/ast/ast.dart';
@@ -27,10 +25,71 @@ main() {
 }
 
 @reflectiveTest
-class NonErrorResolverTest extends ResolverTestCase {
+class NonErrorResolverTest extends NonErrorResolverTestBase {
   @override
-  AnalysisOptions get defaultAnalysisOptions =>
-      new AnalysisOptionsImpl()..strongMode = true;
+  @failingTest
+  test_constConstructorWithMixinWithField_withoutSuperMixins() {
+    return super.test_constConstructorWithMixinWithField_withoutSuperMixins();
+  }
+
+  @override
+  @failingTest // Does not work with old task model
+  test_infer_mixin() {
+    return super.test_infer_mixin();
+  }
+
+  @override
+  @failingTest // Does not work with old task model
+  test_infer_mixin_multiplyConstrained() {
+    return super.test_infer_mixin_multiplyConstrained();
+  }
+
+  @override
+  @failingTest // Does not work with old task model
+  test_infer_mixin_with_substitution() {
+    return super.test_infer_mixin_with_substitution();
+  }
+
+  @override
+  @failingTest // Does not work with old task model
+  test_infer_mixin_with_substitution_functionType() {
+    return super.test_infer_mixin_with_substitution_functionType();
+  }
+
+  @override
+  @failingTest
+  test_intLiteralInDoubleContext_const_exact() {
+    return super.test_intLiteralInDoubleContext_const_exact();
+  }
+
+  @override
+  @failingTest // Fails with the old task model
+  test_issue_32394() {
+    return super.test_issue_32394();
+  }
+
+  @override
+  @failingTest // Does not work with old task model
+  test_mixinInference_with_actual_mixins() {
+    return super.test_mixinInference_with_actual_mixins();
+  }
+
+  @override
+  @failingTest
+  test_null_callMethod() {
+    return super.test_null_callMethod();
+  }
+
+  @override
+  @failingTest
+  test_null_callOperator() {
+    return super.test_null_callOperator();
+  }
+}
+
+class NonErrorResolverTestBase extends ResolverTestCase {
+  @override
+  AnalysisOptions get defaultAnalysisOptions => new AnalysisOptionsImpl();
 
   fail_undefinedEnumConstant() async {
     Source source = addSource(r'''
@@ -38,90 +97,6 @@ enum E { ONE }
 E e() {
   return E.TWO;
 }''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
-  test_abstractSuperMemberReference_superHasConcrete_mixinHasAbstract_method() async {
-    Source source = addSource('''
-class A {
-  void method() {}
-}
-
-abstract class B {
-  void method();
-}
-
-class C extends A with B {
-  void method() {
-    super.method();
-  }
-}
-''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
-  test_abstractSuperMemberReference_superSuperHasConcrete_getter() async {
-    Source source = addSource('''
-abstract class A {
-  int get m => 0;
-}
-
-abstract class B extends A {
-  int get m;
-}
-
-class C extends B {
-  int get m => super.m;
-}
-''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
-  test_abstractSuperMemberReference_superSuperHasConcrete_method() async {
-    Source source = addSource('''
-void main() {
-  print(new C().m());
-}
-
-abstract class A {
-  int m() => 0;
-}
-
-abstract class B extends A {
-  int m();
-}
-
-class C extends B {
-  int m() => super.m();
-}
-''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
-  test_abstractSuperMemberReference_superSuperHasConcrete_setter() async {
-    Source source = addSource('''
-abstract class A {
-  void set m(int v) {}
-}
-
-abstract class B extends A {
-  void set m(int v);
-}
-
-class C extends B {
-  void set m(int v) {
-    super.m = 0;
-  }
-}
-''');
     await computeAnalysisResult(source);
     assertNoErrors(source);
     verify([source]);
@@ -190,6 +165,23 @@ class N {}''');
     await computeAnalysisResult(source);
     assertNoErrors(source);
     verify([source]);
+  }
+
+  test_ambiguousImport_dart_implicitHide() async {
+    Source source = addSource(r'''
+import 'dart:async';
+import 'lib.dart';
+main() {
+  print(Future.zero);
+}
+''');
+    addNamedSource('/lib.dart', r'''
+class Future {
+  static const zero = 0;
+}
+''');
+    await computeAnalysisResult(source);
+    assertNoErrors(source);
   }
 
   test_ambiguousImport_hideCombinator() async {
@@ -315,10 +307,7 @@ process(Object x) {}''');
   }
 
   test_argumentTypeNotAssignable_optionalNew() async {
-    resetWith(
-        options: new AnalysisOptionsImpl()
-          ..previewDart2 = true
-          ..strongMode = true);
+    resetWith(options: new AnalysisOptionsImpl()..previewDart2 = true);
     Source source = addSource(r'''
 class Widget { }
 
@@ -1100,8 +1089,7 @@ typedef Foo<T> = Function<S>(int p);
     CompilationUnit unit = analysisResult.unit;
 
     Element getElement(String search) {
-      return EngineTestCase
-          .findSimpleIdentifier(unit, code, search)
+      return EngineTestCase.findSimpleIdentifier(unit, code, search)
           .staticElement;
     }
 
@@ -1238,34 +1226,10 @@ set x(_) {}
     verify([source]);
   }
 
-  test_conflictingInstanceGetterAndSuperclassMember_instance() async {
-    Source source = addSource(r'''
-class A {
-  get v => 0;
-}
-class B extends A {
-  get v => 1;
-}''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
   test_conflictingStaticGetterAndInstanceSetter_thisClass() async {
     Source source = addSource(r'''
 class A {
   static get x => 0;
-  static set x(int p) {}
-}''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
-  test_conflictingStaticSetterAndInstanceMember_thisClass_method() async {
-    Source source = addSource(r'''
-class A {
-  static x() {}
   static set x(int p) {}
 }''');
     await computeAnalysisResult(source);
@@ -1295,7 +1259,6 @@ const Type d = dynamic;
   }
 
   test_const_imported_defaultParameterValue_withImportPrefix() async {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
     Source source = addNamedSource("/a.dart", r'''
 import 'b.dart';
 const b = const B();
@@ -1314,7 +1277,22 @@ const int value = 12345;
     verify([source]);
   }
 
-  test_constConstructorWithMixinWithField() async {
+  test_constConstructorWithMixinWithField_withoutSuperMixins() async {
+    Source source = addSource(r'''
+class M {
+}
+class A extends Object with M {
+  const A();
+}''');
+    await computeAnalysisResult(source);
+    assertErrors(source, [
+      CompileTimeErrorCode.CONST_CONSTRUCTOR_IN_SUBCLASS_OF_MIXIN_APPLICATION
+    ]);
+    verify([source]);
+  }
+
+  test_constConstructorWithMixinWithField_withSuperMixins() async {
+    resetWith(options: new AnalysisOptionsImpl()..enableSuperMixins = true);
     Source source = addSource(r'''
 class M {
 }
@@ -1466,9 +1444,6 @@ foo() {}''');
 
   test_constEvalTypeBoolNumString_equal() async {
     Source source = addSource(r'''
-class A {
-  const A();
-}
 class B {
   final v;
   const B.a1(bool p) : v = p == true;
@@ -1488,6 +1463,8 @@ class B {
   const B.c5(String p) : v = p == '';
   const B.n1(num p) : v = p == null;
   const B.n2(num p) : v = null == p;
+  const B.n3(Object p) : v = p == null;
+  const B.n4(Object p) : v = null == p;
 }''');
     await computeAnalysisResult(source);
     assertNoErrors(source);
@@ -1495,9 +1472,6 @@ class B {
 
   test_constEvalTypeBoolNumString_notEqual() async {
     Source source = addSource(r'''
-class A {
-  const A();
-}
 class B {
   final v;
   const B.a1(bool p) : v = p != true;
@@ -1517,13 +1491,15 @@ class B {
   const B.c5(String p) : v = p != '';
   const B.n1(num p) : v = p != null;
   const B.n2(num p) : v = null != p;
+  const B.n3(Object p) : v = p != null;
+  const B.n4(Object p) : v = null != p;
 }''');
     await computeAnalysisResult(source);
     assertNoErrors(source);
     verify([source]);
   }
 
-  test_constEvelTypeNum_String() async {
+  test_constEvAlTypeNum_String() async {
     Source source = addSource(r'''
 const String A = 'a';
 const String B = A + 'b';
@@ -1841,21 +1817,6 @@ f(Function a) {
     verify([source]);
   }
 
-  test_extraPositionalArguments_implicitConstructor() async {
-    Source source = addSource(r'''
-class A<E extends num> {
-  A(E x, E y);
-}
-class M {}
-class B<E extends num> = A<E> with M;
-void main() {
-   B<int> x = new B<int>(0,0);
-}''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
   test_extraPositionalArguments_typedef_local() async {
     Source source = addSource(r'''
 typedef A(p1, p2);
@@ -2091,7 +2052,7 @@ class A {
   test_forEach_genericFunctionType() async {
     Source source = addSource(r'''
 main() {
-  for (Null Function<T>(T, Null) e in []) {
+  for (Null Function<T>(T, Null) e in <dynamic>[]) {
     e;
   }
 }''');
@@ -2342,29 +2303,6 @@ void test1() {
   // These two should be equivalent
   foo<String>("hello");
   y<String>("hello");
-}
-''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
-  test_implicitConstructorDependencies() async {
-    // No warning should be generated for the code below; this requires that
-    // implicit constructors are generated for C1 before C2, even though C1
-    // follows C2 in the file.  See dartbug.com/21600.
-    Source source = addSource(r'''
-class B {
-  B(int i);
-}
-class M1 {}
-class M2 {}
-
-class C2 = C1 with M2;
-class C1 = B with M1;
-
-main() {
-  new C2(5);
 }
 ''');
     await computeAnalysisResult(source);
@@ -2698,11 +2636,9 @@ class C implements A, B {
     verify([source]);
   }
 
-  @failingTest // Does not work with old task model
   test_infer_mixin() async {
     AnalysisOptionsImpl options = new AnalysisOptionsImpl();
     options.enableSuperMixins = true;
-    options.strongMode = true;
     resetWith(options: options);
     Source source = addSource('''
 abstract class A<T> {}
@@ -2723,11 +2659,9 @@ class C extends A<B> with M {}
     expect(classC.mixins[0].toString(), 'M<B>');
   }
 
-  @failingTest // Does not work with old task model
   test_infer_mixin_multiplyConstrained() async {
     AnalysisOptionsImpl options = new AnalysisOptionsImpl();
     options.enableSuperMixins = true;
-    options.strongMode = true;
     resetWith(options: options);
     Source source = addSource('''
 abstract class A<T> {}
@@ -2754,11 +2688,9 @@ class F extends E with M {}
     expect(classF.mixins[0].toString(), 'M<C, D>');
   }
 
-  @failingTest // Does not work with old task model
   test_infer_mixin_with_substitution() async {
     AnalysisOptionsImpl options = new AnalysisOptionsImpl();
     options.enableSuperMixins = true;
-    options.strongMode = true;
     resetWith(options: options);
     Source source = addSource('''
 abstract class A<T> {}
@@ -2779,11 +2711,9 @@ class C extends A<List<B>> with M {}
     expect(classC.mixins[0].toString(), 'M<B>');
   }
 
-  @failingTest // Does not work with old task model
   test_infer_mixin_with_substitution_functionType() async {
     AnalysisOptionsImpl options = new AnalysisOptionsImpl();
     options.enableSuperMixins = true;
-    options.strongMode = true;
     resetWith(options: options);
     Source source = addSource('''
 abstract class A<T> {}
@@ -2934,6 +2864,65 @@ class A {
     Source source = addSource('int x = 0;');
     await computeAnalysisResult(source);
     assertNoErrors(source);
+  }
+
+  test_intLiteralInDoubleContext() async {
+    Source source = addSource(r'''
+void takeDouble(double x) {}
+void main() {
+  takeDouble(0);
+  takeDouble(-0);
+  takeDouble(0x0);
+  takeDouble(-0x0);
+}''');
+    await computeAnalysisResult(source);
+    assertNoErrors(source);
+    verify([source]);
+  }
+
+  test_intLiteralInDoubleContext_const() async {
+    Source source = addSource(r'''
+class C {
+  const C(double x)
+    : assert((x + 3) / 2 == 1.5)
+    , assert(x == 0.0);
+}
+@C(0)
+@C(-0)
+@C(0x0)
+@C(-0x0)
+void main() {
+  const C(0);
+  const C(-0);
+  const C(0x0);
+  const C(-0x0);
+}''');
+    await computeAnalysisResult(source);
+    assertNoErrors(source);
+    verify([source]);
+  }
+
+  test_intLiteralInDoubleContext_const_exact() async {
+    // TODO(mfairhurst): get the commented out assertions to pass.
+    Source source = addSource(r'''
+class C {
+  const C(double x)
+    : assert("$x" == "0.0")
+    , assert(identical(x, 0.0));
+}
+@C(0)
+@C(-0)
+@C(0x0)
+@C(-0x0)
+void main() {
+  const C(0);
+  const C(-0);
+  const C(0x0);
+  const C(-0x0);
+}''');
+    await computeAnalysisResult(source);
+    assertNoErrors(source);
+    verify([source]);
   }
 
   test_invalidAnnotation_constantVariable_field() async {
@@ -3580,6 +3569,32 @@ main() {
     verify([source]);
   }
 
+  Future test_issue32114() async {
+    addNamedSource('/a.dart', '''
+class O {}
+
+typedef T Func<T extends O>(T e);
+''');
+    addNamedSource('/b.dart', '''
+import 'a.dart';
+export 'a.dart' show Func;
+
+abstract class A<T extends O> {
+  Func<T> get func;
+}
+''');
+    final Source source = addSource('''
+import 'b.dart';
+
+class B extends A {
+  Func get func => (x) => x;
+}
+''');
+    await computeAnalysisResult(source);
+    assertNoErrors(source);
+    verify([source]);
+  }
+
   test_issue_24191() async {
     Source source = addSource('''
 import 'dart:async';
@@ -3596,7 +3611,6 @@ f(S s) async {
     verify([source]);
   }
 
-  @failingTest // Fails with the old task model
   test_issue_32394() async {
     Source source = addSource('''
 var x = y.map((a) => a.toString());
@@ -3608,7 +3622,7 @@ void main() {
 }
 ''');
     var result = await computeAnalysisResult(source);
-    var z = result.unit.element.topLevelVariables
+    var z = result.unit.declaredElement.topLevelVariables
         .where((e) => e.name == 'z')
         .single;
     expect(z.type.toString(), 'List<String>');
@@ -3662,16 +3676,6 @@ f() {
 
   test_mapKeyTypeNotAssignable() async {
     Source source = addSource("var v = <String, int > {'a' : 1};");
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
-  test_memberWithClassName_setter() async {
-    Source source = addSource(r'''
-class A {
-  set A(v) {}
-}''');
     await computeAnalysisResult(source);
     assertNoErrors(source);
     verify([source]);
@@ -3871,6 +3875,32 @@ class B extends Object with A {}''');
     verify([source]);
   }
 
+  test_mixinInference_with_actual_mixins() async {
+    Source source = addSource('''
+class I<X> {}
+
+mixin M0<T> on I<T> {}
+
+mixin M1<T> on I<T> {
+  T foo() => null;
+}
+
+class A = I<int> with M0, M1;
+
+void main () {
+  var x = new A().foo();
+}
+''');
+    var result = await computeAnalysisResult(source);
+    assertNoErrors(source);
+    verify([source]);
+    var main = result.unit.declarations.last as FunctionDeclaration;
+    var mainBody = main.functionExpression.body as BlockFunctionBody;
+    var xDecl = mainBody.block.statements[0] as VariableDeclarationStatement;
+    var xElem = xDecl.variables.variables[0].declaredElement;
+    expect(xElem.type.toString(), 'int');
+  }
+
   test_mixinInheritsFromNotObject_classDeclaration_extends() async {
     AnalysisOptionsImpl options = new AnalysisOptionsImpl();
     options.enableSuperMixins = true;
@@ -3987,7 +4017,7 @@ class Foo {
   const factory Foo.foo() native 'Foo_Foo_foo';
 }''');
     await computeAnalysisResult(source);
-    assertNoErrors(source);
+    assertErrors(source, [ParserErrorCode.CONST_CONSTRUCTOR_WITH_BODY]);
     // Cannot verify the AST because the import's URI cannot be resolved.
   }
 
@@ -4762,7 +4792,7 @@ main() {
   null.m();
 }''');
     await computeAnalysisResult(source);
-    assertNoErrors(source);
+    assertErrors(source, [StaticTypeWarningCode.UNDEFINED_METHOD]);
   }
 
   test_null_callOperator() async {
@@ -4773,14 +4803,14 @@ main() {
   null[0];
 }''');
     await computeAnalysisResult(source);
-    assertNoErrors(source);
+    assertErrors(source, [
+      StaticTypeWarningCode.UNDEFINED_METHOD,
+      StaticTypeWarningCode.UNDEFINED_METHOD
+    ]);
   }
 
   test_optionalNew_rewrite() async {
-    resetWith(
-        options: new AnalysisOptionsImpl()
-          ..previewDart2 = true
-          ..strongMode = true);
+    resetWith(options: new AnalysisOptionsImpl()..previewDart2 = true);
     Source source = addSource(r'''
 import 'b.dart';
 main() {
@@ -4820,10 +4850,7 @@ class B {
   }
 
   test_optionalNew_rewrite_instantiatesToBounds() async {
-    resetWith(
-        options: new AnalysisOptionsImpl()
-          ..previewDart2 = true
-          ..strongMode = true);
+    resetWith(options: new AnalysisOptionsImpl()..previewDart2 = true);
     Source source = addSource(r'''
 import 'b.dart';
 
@@ -4951,6 +4978,21 @@ g(g) {
 }
 h(x) {}
 ''');
+    await computeAnalysisResult(source);
+    assertNoErrors(source);
+    verify([source]);
+  }
+
+  test_parametricCallFunction() async {
+    Source source = addSource(r'''
+f() {
+  var c = new C();
+  c<String>().codeUnits;
+}
+
+class C {
+  T call<T>() => null;
+}''');
     await computeAnalysisResult(source);
     assertNoErrors(source);
     verify([source]);
@@ -5844,18 +5886,6 @@ class B extends A {
     verify([source]);
   }
 
-  test_undefinedConstructorInInitializer_implicit_typeAlias() async {
-    Source source = addSource(r'''
-class M {}
-class A = Object with M;
-class B extends A {
-  B();
-}''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
   test_undefinedConstructorInInitializer_redirecting() async {
     Source source = addSource(r'''
 class Foo {
@@ -5916,7 +5946,11 @@ main(int p) {
   p.();
 }''');
     await computeAnalysisResult(source);
-    assertErrors(source, [ParserErrorCode.MISSING_IDENTIFIER]);
+    assertErrors(source, [
+      ParserErrorCode.MISSING_IDENTIFIER,
+      ParserErrorCode.MISSING_IDENTIFIER,
+      StaticTypeWarningCode.UNDEFINED_GETTER
+    ]);
   }
 
   test_undefinedMethod_functionExpression_callMethod() async {
@@ -6079,6 +6113,17 @@ main() {
     Source source = addSource("import 'dart-ext:lib';");
     await computeAnalysisResult(source);
     assertNoErrors(source);
+  }
+
+  Future test_useDynamicWithPrefix() async {
+    final Source source = addSource('''
+import 'dart:core' as core;
+
+core.dynamic dynamicVariable;
+''');
+    await computeAnalysisResult(source);
+    assertNoErrors(source);
+    verify([source]);
   }
 
   test_wrongNumberOfParametersForOperator1() async {
@@ -6383,43 +6428,6 @@ f() sync* {
     verify([source]);
   }
 
-  Future test_issue32114() async {
-    addNamedSource('/a.dart', '''
-class O {}
-
-typedef T Func<T extends O>(T e);
-''');
-    addNamedSource('/b.dart', '''
-import 'a.dart';
-export 'a.dart' show Func;
-
-abstract class A<T extends O> {
-  Func<T> get func;
-}
-''');
-    final Source source = addSource('''
-import 'b.dart';
-
-class B extends A {
-  Func get func => (x) => x;
-}
-''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
-  Future test_useDynamicWithPrefix() async {
-    final Source source = addSource('''
-import 'dart:core' as core;
-
-core.dynamic dynamicVariable;
-''');
-    await computeAnalysisResult(source);
-    assertNoErrors(source);
-    verify([source]);
-  }
-
   Future<Null> _check_wrongNumberOfParametersForOperator(
       String name, String parameters) async {
     Source source = addSource("""
@@ -6429,7 +6437,6 @@ class A {
     await computeAnalysisResult(source);
     assertNoErrors(source);
     verify([source]);
-    reset();
   }
 
   Future<Null> _check_wrongNumberOfParametersForOperator1(String name) async {

@@ -8,7 +8,6 @@ import 'package:analyzer/src/dart/ast/token.dart';
 import 'package:analyzer/src/dart/scanner/reader.dart';
 import 'package:analyzer/src/dart/scanner/scanner.dart';
 import 'package:analyzer/src/generated/source.dart';
-import 'package:front_end/src/scanner/scanner.dart' as fe;
 import 'package:test/test.dart';
 import 'package:test_reflective_loader/test_reflective_loader.dart';
 
@@ -131,8 +130,7 @@ class LineInfoTest extends EngineTestCase {
     var token = scanner.tokenize();
     expect(token.lexeme, 'var');
     var lineStarts = scanner.lineStarts;
-    expect(
-        lineStarts, orderedEquals([0, 5, 7, 9, fe.Scanner.useFasta ? 12 : 11]));
+    expect(lineStarts, orderedEquals([0, 5, 7, 9, 12]));
   }
 
   void test_translate_missing_closing_gt_error() {
@@ -167,11 +165,9 @@ class LineInfoTest extends EngineTestCase {
   }
 
   Token _scanWithListener(String source, GatheringErrorListener listener,
-      {bool genericMethodComments: false,
-      bool lazyAssignmentOperators: false}) {
+      {bool lazyAssignmentOperators: false}) {
     Scanner scanner =
         new Scanner(null, new CharSequenceReader(source), listener);
-    scanner.scanGenericMethodComments = genericMethodComments;
     scanner.scanLazyAssignmentOperators = lazyAssignmentOperators;
     Token result = scanner.tokenize();
     listener.setLineInfo(new TestSource(), scanner.lineStarts);

@@ -33,9 +33,6 @@ abstract class BackendUsage {
   /// `true` if a core-library function requires the preamble file to function.
   bool get requiresPreamble;
 
-  /// `true` if [CommonElements.invokeOnMethod] is used.
-  bool get isInvokeOnUsed;
-
   /// `true` of `Object.runtimeType` is used.
   bool get isRuntimeTypeUsed;
 
@@ -107,9 +104,6 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
   /// `true` if a core-library function requires the preamble file to function.
   bool requiresPreamble = false;
 
-  /// `true` if [CommonElements.invokeOnMethod] is used.
-  bool isInvokeOnUsed = false;
-
   /// `true` if `Function.apply` is used.
   bool isFunctionApplyUsed = false;
 
@@ -121,7 +115,7 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
 
   BackendUsageBuilderImpl(this._frontendStrategy);
 
-  CommonElements get _commonElements => _frontendStrategy.commonElements;
+  KCommonElements get _commonElements => _frontendStrategy.commonElements;
 
   @override
   void registerBackendFunctionUse(FunctionEntity element) {
@@ -165,10 +159,6 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
         element == _commonElements.functionClass ||
         element == _commonElements.stringClass) {
       // TODO(johnniwinther): Avoid these.
-      return true;
-    } else if (element == _commonElements.genericNoSuchMethod ||
-        element == _commonElements.unresolvedConstructorError ||
-        element == _commonElements.malformedTypeError) {
       return true;
     }
     return false;
@@ -227,8 +217,6 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
       _needToInitializeIsolateAffinityTag = true;
     } else if (member == _commonElements.requiresPreambleMarker) {
       requiresPreamble = true;
-    } else if (member == _commonElements.invokeOnMethod) {
-      isInvokeOnUsed = true;
     } else if (_commonElements.isFunctionApplyMethod(member)) {
       isFunctionApplyUsed = true;
     } else if (member.library == _commonElements.mirrorsLibrary) {
@@ -266,7 +254,6 @@ class BackendUsageBuilderImpl implements BackendUsageBuilder {
         needToInitializeIsolateAffinityTag: _needToInitializeIsolateAffinityTag,
         needToInitializeDispatchProperty: _needToInitializeDispatchProperty,
         requiresPreamble: requiresPreamble,
-        isInvokeOnUsed: isInvokeOnUsed,
         runtimeTypeUses: _runtimeTypeUses,
         isFunctionApplyUsed: isFunctionApplyUsed,
         isMirrorsUsed: isMirrorsUsed,
@@ -293,9 +280,6 @@ class BackendUsageImpl implements BackendUsage {
   /// `true` if a core-library function requires the preamble file to function.
   final bool requiresPreamble;
 
-  /// `true` if [CommonElements.invokeOnMethod] is used.
-  final bool isInvokeOnUsed;
-
   /// `true` if `Function.apply` is used.
   final bool isFunctionApplyUsed;
 
@@ -313,7 +297,6 @@ class BackendUsageImpl implements BackendUsage {
       this.needToInitializeIsolateAffinityTag,
       this.needToInitializeDispatchProperty,
       this.requiresPreamble,
-      this.isInvokeOnUsed,
       Set<RuntimeTypeUse> runtimeTypeUses,
       this.isFunctionApplyUsed,
       this.isMirrorsUsed,

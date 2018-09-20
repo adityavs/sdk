@@ -380,7 +380,7 @@ class EditDomainHandler extends AbstractRequestHandler {
   /**
    * Implement the `edit.importElements` request.
    */
-  Future<Null> importElements(Request request) async {
+  Future<void> importElements(Request request) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     EditImportElementsParams params =
@@ -394,7 +394,7 @@ class EditDomainHandler extends AbstractRequestHandler {
     }
     CompilationUnitElement libraryUnit =
         result.libraryElement.definingCompilationUnit;
-    if (libraryUnit != result.unit.element) {
+    if (libraryUnit != result.unit.declaredElement) {
       // The file in the request is a part of a library. We need to pass the
       // defining compilation unit to the computer, not the part.
       result = await server.getAnalysisResult(libraryUnit.source.fullName);
@@ -408,11 +408,13 @@ class EditDomainHandler extends AbstractRequestHandler {
     ImportElementsComputer computer =
         new ImportElementsComputer(server.resourceProvider, result);
     SourceChange change = await computer.createEdits(params.elements);
+    List<SourceFileEdit> edits = change.edits;
+    SourceFileEdit edit = edits.isEmpty ? null : edits[0];
     //
     // Send the response.
     //
     server.sendResponse(
-        new EditImportElementsResult(change.edits[0]).toResponse(request.id));
+        new EditImportElementsResult(edit: edit).toResponse(request.id));
   }
 
   Future isPostfixCompletionApplicable(Request request) async {
@@ -460,7 +462,7 @@ class EditDomainHandler extends AbstractRequestHandler {
     server.sendResponse(response);
   }
 
-  Future<Null> organizeDirectives(Request request) async {
+  Future<void> organizeDirectives(Request request) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     server.options.analytics?.sendEvent('edit', 'organizeDirectives');
@@ -497,7 +499,7 @@ class EditDomainHandler extends AbstractRequestHandler {
         new EditOrganizeDirectivesResult(fileEdit).toResponse(request.id));
   }
 
-  Future<Null> sortMembers(Request request) async {
+  Future<void> sortMembers(Request request) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     var params = new EditSortMembersParams.fromRequest(request);
@@ -782,6 +784,7 @@ class _RefactoringManager {
         refactoring is ExtractMethodRefactoring ||
         refactoring is ExtractWidgetRefactoring ||
         refactoring is InlineMethodRefactoring ||
+        refactoring is MoveFileRefactoring ||
         refactoring is RenameRefactoring;
   }
 
@@ -1014,19 +1017,13 @@ class _RefactoringManager {
           }
         }
 
-        // Canonicalize to ConstructorName.
-        var constructorName = _canonicalizeToConstructorName(node);
-        if (constructorName != null) {
-          node = constructorName;
-          element = constructorName.staticElement;
-          // Use the constructor name offset/length.
-          if (constructorName.name != null) {
-            feedbackOffset = constructorName.name.offset;
-            feedbackLength = constructorName.name.length;
-          } else {
-            feedbackOffset = -1;
-            feedbackLength = 0;
-          }
+        // Rename the class when on `new` in an instance creation.
+        if (node is InstanceCreationExpression) {
+          InstanceCreationExpression creation = node;
+          var typeIdentifier = creation.constructorName.type.name;
+          element = typeIdentifier.staticElement;
+          feedbackOffset = typeIdentifier.offset;
+          feedbackLength = typeIdentifier.length;
         }
 
         // do create the refactoring
@@ -1160,6 +1157,12 @@ class _RefactoringManager {
       inlineRefactoring.inlineAll = inlineOptions.inlineAll;
       return new RefactoringStatus();
     }
+    if (refactoring is MoveFileRefactoring) {
+      MoveFileRefactoring moveRefactoring = this.refactoring;
+      MoveFileOptions moveOptions = params.options;
+      moveRefactoring.newFile = moveOptions.newFile;
+      return new RefactoringStatus();
+    }
     if (refactoring is RenameRefactoring) {
       RenameRefactoring renameRefactoring = refactoring;
       RenameOptions renameOptions = params.options;
@@ -1167,32 +1170,6 @@ class _RefactoringManager {
       return renameRefactoring.checkNewName();
     }
     return new RefactoringStatus();
-  }
-
-  /**
-   * If the [node] is a constructor reference, return the corresponding
-   * [ConstructorName], or `null` otherwise.
-   */
-  static ConstructorName _canonicalizeToConstructorName(AstNode node) {
-    var parent = node.parent;
-    var parent2 = parent?.parent;
-
-    // "named" in "Class.named".
-    if (parent is ConstructorName) {
-      return parent;
-    }
-
-    // "Class" in "Class.named".
-    if (parent is TypeName && parent2 is ConstructorName) {
-      return parent2;
-    }
-
-    // Canonicalize "new Class.named()" to "Class.named".
-    if (node is InstanceCreationExpression) {
-      return node.constructorName;
-    }
-
-    return null;
   }
 }
 

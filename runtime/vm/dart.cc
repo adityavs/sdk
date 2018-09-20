@@ -15,7 +15,7 @@
 #include "vm/heap/become.h"
 #include "vm/heap/freelist.h"
 #include "vm/heap/heap.h"
-#include "vm/heap/store_buffer.h"
+#include "vm/heap/pointer_block.h"
 #include "vm/isolate.h"
 #include "vm/kernel_isolate.h"
 #include "vm/malloc_hooks.h"
@@ -29,6 +29,7 @@
 #include "vm/service_isolate.h"
 #include "vm/simulator.h"
 #include "vm/snapshot.h"
+#include "vm/stack_frame.h"
 #include "vm/stub_code.h"
 #include "vm/symbols.h"
 #include "vm/thread_interrupter.h"
@@ -91,7 +92,7 @@ static void CheckOffsets() {
   // These offsets are embedded in precompiled instructions. We need simarm
   // (compiler) and arm (runtime) to agree.
   CHECK_OFFSET(Thread::stack_limit_offset(), 4);
-  CHECK_OFFSET(Thread::object_null_offset(), 56);
+  CHECK_OFFSET(Thread::object_null_offset(), 64);
   CHECK_OFFSET(SingleTargetCache::upper_limit_offset(), 14);
   CHECK_OFFSET(Isolate::object_store_offset(), 28);
   NOT_IN_PRODUCT(CHECK_OFFSET(sizeof(ClassHeapStats), 168));
@@ -100,7 +101,7 @@ static void CheckOffsets() {
   // These offsets are embedded in precompiled instructions. We need simarm64
   // (compiler) and arm64 (runtime) to agree.
   CHECK_OFFSET(Thread::stack_limit_offset(), 8);
-  CHECK_OFFSET(Thread::object_null_offset(), 104);
+  CHECK_OFFSET(Thread::object_null_offset(), 112);
   CHECK_OFFSET(SingleTargetCache::upper_limit_offset(), 26);
   CHECK_OFFSET(Isolate::object_store_offset(), 56);
   NOT_IN_PRODUCT(CHECK_OFFSET(sizeof(ClassHeapStats), 288));
@@ -134,6 +135,32 @@ char* Dart::InitOnce(const uint8_t* vm_isolate_snapshot,
     FLAG_verify_gc_contains = true;
   }
 #endif
+
+  if (FLAG_use_bytecode_compiler) {
+    // Interpreter is not able to trigger compilation yet.
+    // TODO(alexmarkov): Revise
+    FLAG_enable_interpreter = false;
+  }
+
+  if (FLAG_enable_interpreter) {
+#if defined(USING_SIMULATOR) || defined(TARGET_ARCH_DBC)
+    return strdup(
+        "--enable-interpreter is not supported when targeting "
+        "a sim* architecture.");
+#endif  // defined(USING_SIMULATOR) || defined(TARGET_ARCH_DBC)
+
+#if defined(TARGET_OS_WINDOWS)
+    // TODO(34393): The interpreter currently relies on computed gotos, which
+    // aren't supported on Windows.
+    return strdup("--enable-interpreter is not supported on Windows.");
+#endif  // defined(TARGET_OS_WINDOWS)
+
+    FLAG_use_field_guards = false;
+    FLAG_optimization_counter_threshold = -1;
+  }
+
+  FrameLayout::InitOnce();
+
   set_thread_exit_callback(thread_exit);
   SetFileCallbacks(file_open, file_read, file_write, file_close);
   set_entropy_source_callback(entropy_source);
@@ -324,21 +351,21 @@ char* Dart::InitOnce(const uint8_t* vm_isolate_snapshot,
   return NULL;
 }
 
-// This waits until only the VM isolate and the service isolate remains in the
-// list, i.e. list length == 2.
+bool Dart::HasApplicationIsolateLocked() {
+  for (Isolate* isolate = Isolate::isolates_list_head_; isolate != NULL;
+       isolate = isolate->next_) {
+    if (!Isolate::IsVMInternalIsolate(isolate)) return true;
+  }
+  return false;
+}
+
+// This waits until only the VM, service and kernel isolates are in the list.
 void Dart::WaitForApplicationIsolateShutdown() {
   ASSERT(!Isolate::creation_enabled_);
   MonitorLocker ml(Isolate::isolates_list_monitor_);
-  while ((Isolate::isolates_list_head_ != NULL) &&
-         (Isolate::isolates_list_head_->next_ != NULL) &&
-         (Isolate::isolates_list_head_->next_->next_ != NULL)) {
+  while (HasApplicationIsolateLocked()) {
     ml.Wait();
   }
-  ASSERT(
-      ((Isolate::isolates_list_head_ == Dart::vm_isolate()) &&
-       ServiceIsolate::IsServiceIsolate(Isolate::isolates_list_head_->next_)) ||
-      ((Isolate::isolates_list_head_->next_ == Dart::vm_isolate()) &&
-       ServiceIsolate::IsServiceIsolate(Isolate::isolates_list_head_)));
 }
 
 // This waits until only the VM isolate remains in the list.
@@ -402,13 +429,20 @@ const char* Dart::Cleanup() {
 
   // Wait for all isolates, but the service and the vm isolate to shut down.
   // Only do that if there is a service isolate running.
-  if (ServiceIsolate::IsRunning()) {
+  if (ServiceIsolate::IsRunning() || KernelIsolate::IsRunning()) {
     if (FLAG_trace_shutdown) {
       OS::PrintErr("[+%" Pd64 "ms] SHUTDOWN: Shutting down app isolates\n",
                    UptimeMillis());
     }
     WaitForApplicationIsolateShutdown();
   }
+
+  // Shutdown the kernel isolate.
+  if (FLAG_trace_shutdown) {
+    OS::PrintErr("[+%" Pd64 "ms] SHUTDOWN: Shutting down kernel isolate\n",
+                 UptimeMillis());
+  }
+  KernelIsolate::Shutdown();
 
   // Shutdown the service isolate.
   if (FLAG_trace_shutdown) {
@@ -612,18 +646,11 @@ RawError* Dart::InitializeIsolate(const uint8_t* snapshot_data,
   if (FLAG_print_class_table) {
     I->class_table()->Print();
   }
-
-  bool is_kernel_isolate = false;
-  USE(is_kernel_isolate);
-
-#ifndef DART_PRECOMPILED_RUNTIME
-  KernelIsolate::InitCallback(I);
-  is_kernel_isolate = KernelIsolate::IsKernelIsolate(I);
-#endif
-
   ServiceIsolate::MaybeMakeServiceIsolate(I);
+
 #if !defined(PRODUCT)
-  if (!ServiceIsolate::IsServiceIsolate(I) && !is_kernel_isolate) {
+  if (!ServiceIsolate::IsServiceIsolate(I) &&
+      !KernelIsolate::IsKernelIsolate(I)) {
     I->message_handler()->set_should_pause_on_start(
         FLAG_pause_isolates_on_start);
     I->message_handler()->set_should_pause_on_exit(FLAG_pause_isolates_on_exit);
@@ -673,7 +700,7 @@ const char* Dart::FeaturesString(Isolate* isolate,
   // isolate is always initialized from a vm_snapshot generated in non strong
   // mode.
   if (!is_vm_isolate) {
-    ADD_FLAG(strong, strong, FLAG_strong);
+    buffer.AddString(FLAG_strong ? " strong" : " no-strong");
   }
 
   if (Snapshot::IncludesCode(kind)) {
@@ -685,9 +712,10 @@ const char* Dart::FeaturesString(Isolate* isolate,
     ADD_FLAG(error_on_bad_override, enable_error_on_bad_override,
              FLAG_error_on_bad_override);
     // sync-async and reify_generic_functions also affect deopt_ids.
-    ADD_FLAG(sync_async, sync_async, FLAG_sync_async);
-    ADD_FLAG(reify_generic_functions, reify_generic_functions,
-             FLAG_reify_generic_functions);
+    buffer.AddString(FLAG_sync_async ? " sync_async" : " no-sync_async");
+    buffer.AddString(FLAG_reify_generic_functions
+                         ? " reify_generic_functions"
+                         : " no-reify_generic_functions");
     if (kind == Snapshot::kFullJIT) {
       ADD_FLAG(use_field_guards, use_field_guards, FLAG_use_field_guards);
       ADD_FLAG(use_osr, use_osr, FLAG_use_osr);
@@ -712,6 +740,7 @@ const char* Dart::FeaturesString(Isolate* isolate,
 #else
     buffer.AddString(" x64-sysv");
 #endif
+
 #elif defined(TARGET_ARCH_DBC)
 #if defined(ARCH_IS_32_BIT)
     buffer.AddString(" dbc32");
@@ -758,6 +787,9 @@ void Dart::ShutdownIsolate(Isolate* isolate) {
 void Dart::ShutdownIsolate() {
   Isolate* isolate = Isolate::Current();
   isolate->Shutdown();
+  if (KernelIsolate::IsKernelIsolate(isolate)) {
+    KernelIsolate::SetKernelIsolate(NULL);
+  }
   delete isolate;
 }
 

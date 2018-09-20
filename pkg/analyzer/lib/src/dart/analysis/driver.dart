@@ -19,9 +19,7 @@ import 'package:analyzer/file_system/file_system.dart';
 import 'package:analyzer/src/context/context_root.dart';
 import 'package:analyzer/src/dart/analysis/file_state.dart';
 import 'package:analyzer/src/dart/analysis/file_tracker.dart';
-import 'package:analyzer/src/dart/analysis/frontend_resolution.dart';
 import 'package:analyzer/src/dart/analysis/index.dart';
-import 'package:analyzer/src/dart/analysis/kernel_context.dart';
 import 'package:analyzer/src/dart/analysis/library_analyzer.dart';
 import 'package:analyzer/src/dart/analysis/library_context.dart';
 import 'package:analyzer/src/dart/analysis/search.dart';
@@ -34,6 +32,7 @@ import 'package:analyzer/src/generated/engine.dart'
         AnalysisContext,
         AnalysisEngine,
         AnalysisOptions,
+        AnalysisOptionsImpl,
         PerformanceStatistics;
 import 'package:analyzer/src/generated/resolver.dart';
 import 'package:analyzer/src/generated/source.dart';
@@ -52,7 +51,7 @@ import 'package:meta/meta.dart';
  * but this breaks `AnalysisContext` and code generation. So, for now let's
  * work around them, and rewrite generators to [AnalysisDriver].
  */
-typedef Future<Null> WorkToWaitAfterComputingResult(String path);
+typedef Future<void> WorkToWaitAfterComputingResult(String path);
 
 /**
  * This class computes [AnalysisResult]s for Dart files.
@@ -88,33 +87,19 @@ typedef Future<Null> WorkToWaitAfterComputingResult(String path);
  * results are "eventually consistent" with the file system by simply calling
  * [changeFile] any time the contents of a file on the file system have changed.
  *
- *
  * TODO(scheglov) Clean up the list of implicitly analyzed files.
  */
 class AnalysisDriver implements AnalysisDriverGeneric {
   /**
    * The version of data format, should be incremented on every format change.
    */
-  static const int DATA_VERSION = 62;
+  static const int DATA_VERSION = 69;
 
   /**
    * The number of exception contexts allowed to write. Once this field is
    * zero, we stop writing any new exception contexts in this process.
    */
   static int allowedNumberOfContextsToWrite = 10;
-
-  /**
-   * Whether kernel should be used to resynthesize elements.
-   */
-  final bool enableKernelDriver;
-
-  /**
-   * The [Folder] with the `vm_platform.dill` file.
-   *
-   * We use `vm_platform.dill`, because loading patches is not yet implemented,
-   * and patches are not a part of SDK distribution.
-   */
-  final Folder kernelPlatformFolder;
 
   /**
    * The scheduler that schedules analysis work in this, and possibly other
@@ -155,7 +140,7 @@ class AnalysisDriver implements AnalysisDriverGeneric {
   /**
    * The analysis options to analyze with.
    */
-  AnalysisOptions _analysisOptions;
+  AnalysisOptionsImpl _analysisOptions;
 
   /**
    * The optional SDK bundle, used when the client cannot read SDK files.
@@ -179,15 +164,16 @@ class AnalysisDriver implements AnalysisDriverGeneric {
   final ContextRoot contextRoot;
 
   /**
-   * The salt to mix into all hashes used as keys for serialized data.
+   * The salt to mix into all hashes used as keys for unlinked data.
    */
-  final Uint32List _salt = new Uint32List(1 + AnalysisOptions.signatureLength);
+  final Uint32List _unlinkedSalt =
+      new Uint32List(1 + AnalysisOptionsImpl.unlinkedSignatureLength);
 
   /**
-   * If [enableKernelDriver], then the instance of [FrontEndCompiler].
-   * Otherwise `null`.
+   * The salt to mix into all hashes used as keys for linked data.
    */
-  FrontEndCompiler _frontEndCompiler;
+  final Uint32List _linkedSalt =
+      new Uint32List(1 + AnalysisOptions.signatureLength);
 
   /**
    * The set of priority files, that should be analyzed sooner.
@@ -352,9 +338,7 @@ class AnalysisDriver implements AnalysisDriverGeneric {
       this.contextRoot,
       SourceFactory sourceFactory,
       this._analysisOptions,
-      {this.enableKernelDriver: false,
-      this.kernelPlatformFolder,
-      PackageBundle sdkBundle,
+      {PackageBundle sdkBundle,
       this.disableChangesAndCacheAllResults: false,
       SummaryDataStore externalSummaries})
       : _logger = logger,
@@ -365,7 +349,6 @@ class AnalysisDriver implements AnalysisDriverGeneric {
     _onResults = _resultController.stream.asBroadcastStream();
     _testView = new AnalysisDriverTestView(this);
     _createFileTracker();
-    _createKernelDriver();
     _scheduler.add(this);
     _search = new Search(this);
   }
@@ -596,7 +579,6 @@ class AnalysisDriver implements AnalysisDriverGeneric {
     Iterable<String> addedFiles = _fileTracker.addedFiles;
     _createFileTracker();
     _fileTracker.addFiles(addedFiles);
-    _createKernelDriver();
   }
 
   /**
@@ -867,7 +849,7 @@ class AnalysisDriver implements AnalysisDriverGeneric {
     _throwIfNotAbsolutePath(path);
     var file = fsState.getFileForPath(path);
     ApiSignature signature = new ApiSignature();
-    signature.addUint32List(_salt);
+    signature.addUint32List(_linkedSalt);
     signature.addString(file.transitiveSignature);
     return signature;
   }
@@ -1157,7 +1139,6 @@ class AnalysisDriver implements AnalysisDriverGeneric {
   void removeFile(String path) {
     _throwIfNotAbsolutePath(path);
     _throwIfChangesAreNotAllowed();
-    _frontEndCompilerInvalidate(path);
     _fileTracker.removeFile(path);
     _priorityResults.clear();
   }
@@ -1166,7 +1147,6 @@ class AnalysisDriver implements AnalysisDriverGeneric {
    * Implementation for [changeFile].
    */
   void _changeFile(String path) {
-    _frontEndCompilerInvalidate(path);
     _fileTracker.changeFile(path);
     _priorityResults.clear();
   }
@@ -1242,44 +1222,25 @@ class AnalysisDriver implements AnalysisDriverGeneric {
       await null;
       try {
         LibraryContext libraryContext;
-        KernelContext kernelContext;
         try {
           _testView.numOfAnalyzedLibraries++;
 
-          LibraryAnalyzer analyzer;
-          if (enableKernelDriver) {
-            kernelContext = await _createKernelContext(library);
-            analyzer = new LibraryAnalyzer(
-                _logger,
-                analysisOptions,
-                declaredVariables,
-                sourceFactory,
-                kernelContext.isLibraryUri,
-                kernelContext.analysisContext,
-                kernelContext.resynthesizer,
-                library,
-                enableKernelDriver: true,
-                useCFE: _analysisOptions.useFastaParser,
-                frontEndCompiler: _frontEndCompiler);
-          } else {
-            if (!_fsState.getFileForUri(Uri.parse('dart:core')).exists) {
-              return _newMissingDartLibraryResult(file, 'dart:core');
-            }
-            if (!_fsState.getFileForUri(Uri.parse('dart:async')).exists) {
-              return _newMissingDartLibraryResult(file, 'dart:async');
-            }
-            libraryContext = await _createLibraryContext(library);
-            analyzer = new LibraryAnalyzer(
-                _logger,
-                analysisOptions,
-                declaredVariables,
-                sourceFactory,
-                libraryContext.isLibraryUri,
-                libraryContext.analysisContext,
-                libraryContext.resynthesizer,
-                library);
+          if (!_fsState.getFileForUri(Uri.parse('dart:core')).exists) {
+            return _newMissingDartLibraryResult(file, 'dart:core');
           }
+          if (!_fsState.getFileForUri(Uri.parse('dart:async')).exists) {
+            return _newMissingDartLibraryResult(file, 'dart:async');
+          }
+          libraryContext = await _createLibraryContext(library);
 
+          LibraryAnalyzer analyzer = new LibraryAnalyzer(
+              analysisOptions,
+              declaredVariables,
+              sourceFactory,
+              libraryContext.isLibraryUri,
+              libraryContext.analysisContext,
+              libraryContext.resynthesizer,
+              library);
           Map<FileState, UnitAnalysisResult> results = await analyzer.analyze();
 
           List<int> bytes;
@@ -1315,7 +1276,6 @@ class AnalysisDriver implements AnalysisDriverGeneric {
           return result;
         } finally {
           libraryContext?.dispose();
-          kernelContext?.dispose();
         }
       } catch (exception, stackTrace) {
         String contextKey = _storeExceptionContextDuringAnalysis(
@@ -1349,28 +1309,15 @@ class AnalysisDriver implements AnalysisDriverGeneric {
       }
     }
 
-    if (enableKernelDriver) {
-      var kernelContext = await _createKernelContext(library);
-      try {
-        CompilationUnitElement element =
-            kernelContext.computeUnitElement(library.source, file.source);
-        String signature = library.transitiveSignature;
-        return new UnitElementResult(
-            currentSession, path, file.uri, signature, element);
-      } finally {
-        kernelContext.dispose();
-      }
-    } else {
-      LibraryContext libraryContext = await _createLibraryContext(library);
-      try {
-        CompilationUnitElement element =
-            libraryContext.computeUnitElement(library.source, file.source);
-        String signature = library.transitiveSignature;
-        return new UnitElementResult(
-            currentSession, path, file.uri, signature, element);
-      } finally {
-        libraryContext.dispose();
-      }
+    LibraryContext libraryContext = await _createLibraryContext(library);
+    try {
+      CompilationUnitElement element =
+          libraryContext.computeUnitElement(library.source, file.source);
+      String signature = library.transitiveSignature;
+      return new UnitElementResult(
+          currentSession, path, file.uri, signature, element);
+    } finally {
+      libraryContext.dispose();
     }
   }
 
@@ -1399,43 +1346,18 @@ class AnalysisDriver implements AnalysisDriverGeneric {
    */
   void _createFileTracker() {
     _fillSalt();
-    _fsState = new FileSystemState(_logger, _byteStore, _contentOverlay,
-        _resourceProvider, sourceFactory, analysisOptions, _salt,
+    _fsState = new FileSystemState(
+        _logger,
+        _byteStore,
+        _contentOverlay,
+        _resourceProvider,
+        sourceFactory,
+        analysisOptions,
+        _unlinkedSalt,
+        _linkedSalt,
         externalSummaries: _externalSummaries,
         parseExceptionHandler: _storeExceptionContextDuringParsing);
     _fileTracker = new FileTracker(_logger, _fsState, _changeHook);
-  }
-
-  Future<KernelContext> _createKernelContext(FileState library) async {
-    // TODO(brianwilkerson) Determine whether this await is necessary.
-    await null;
-    return await KernelContext.forSingleLibrary(
-        library,
-        _logger,
-        _analysisOptions,
-        declaredVariables,
-        _sourceFactory,
-        fsState,
-        _frontEndCompiler);
-  }
-
-  /**
-   * Creates a new [FrontEndCompiler] in [_frontEndCompiler].
-   *
-   * This is used both on initial construction and whenever the configuration
-   * changes.
-   */
-  void _createKernelDriver() {
-    if (enableKernelDriver) {
-      _frontEndCompiler = new FrontEndCompiler(
-          _logger,
-          _byteStore,
-          analysisOptions,
-          kernelPlatformFolder,
-          sourceFactory,
-          fsState,
-          _resourceProvider.pathContext);
-    }
   }
 
   /**
@@ -1473,25 +1395,14 @@ class AnalysisDriver implements AnalysisDriverGeneric {
   }
 
   /**
-   * Fill [_salt] with data.
+   * Fill [_unlinkedSalt] and [_linkedSalt] with data.
    */
   void _fillSalt() {
-    _salt[0] = DATA_VERSION;
-    List<int> crossContextOptions = _analysisOptions.signature;
-    assert(crossContextOptions.length == AnalysisOptions.signatureLength);
-    for (int i = 0; i < crossContextOptions.length; i++) {
-      _salt[i + 1] = crossContextOptions[i];
-    }
-  }
+    _unlinkedSalt[0] = DATA_VERSION;
+    _unlinkedSalt.setAll(1, _analysisOptions.unlinkedSignature);
 
-  /**
-   * Invalidate the file with the given [path] in the [_frontEndCompiler].
-   */
-  void _frontEndCompilerInvalidate(String path) {
-    if (_frontEndCompiler != null) {
-      var fileUri = _resourceProvider.pathContext.toUri(path);
-      _frontEndCompiler.invalidate(fileUri);
-    }
+    _linkedSalt[0] = DATA_VERSION;
+    _linkedSalt.setAll(1, _analysisOptions.signature);
   }
 
   /**
@@ -1561,7 +1472,7 @@ class AnalysisDriver implements AnalysisDriverGeneric {
    */
   String _getResolvedUnitSignature(FileState library, FileState file) {
     ApiSignature signature = new ApiSignature();
-    signature.addUint32List(_salt);
+    signature.addUint32List(_linkedSalt);
     signature.addString(library.transitiveSignature);
     signature.addString(file.contentHash);
     return signature.toHex();
@@ -2123,14 +2034,14 @@ class AnalysisResult extends FileResult implements results.ResolveResult {
       : super(driver?.currentSession, path, uri, lineInfo, isPart);
 
   @override
-  LibraryElement get libraryElement => unit.element.library;
+  LibraryElement get libraryElement => unit.declaredElement.library;
 
   @override
   results.ResultState get state =>
       exists ? results.ResultState.VALID : results.ResultState.NOT_A_FILE;
 
   @override
-  TypeProvider get typeProvider => unit.element.context.typeProvider;
+  TypeProvider get typeProvider => unit.declaredElement.context.typeProvider;
 }
 
 abstract class BaseAnalysisResult implements results.AnalysisResult {
@@ -2561,10 +2472,12 @@ class _TopLevelNameDeclarationsTask {
       FileState file = driver._fsState.getFileForPath(path);
       if (!file.isPart) {
         bool isExported = false;
-        TopLevelDeclaration declaration = file.topLevelDeclarations[name];
-        for (FileState part in file.partedFiles) {
+
+        TopLevelDeclaration declaration;
+        for (FileState part in file.libraryFiles) {
           declaration ??= part.topLevelDeclarations[name];
         }
+
         if (declaration == null) {
           declaration = file.exportedTopLevelDeclarations[name];
           isExported = true;

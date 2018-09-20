@@ -184,7 +184,8 @@ class Parser {
    * A flag indicating whether the analyzer [Parser] factory method
    * will return a fasta based parser or an analyzer based parser.
    */
-  static const bool useFasta = const bool.fromEnvironment("useFastaParser");
+  static const bool useFasta =
+      const bool.fromEnvironment("useFastaParser", defaultValue: true);
 
   /**
    * The source being parsed.
@@ -264,12 +265,6 @@ class Parser {
   @deprecated
   bool parseGenericMethods = false;
 
-  /**
-   * A flag indicating whether to parse generic method comments, of the form
-   * `/*=T*/` and `/*<T>*/`.
-   */
-  bool parseGenericMethodComments = false;
-
   bool allowNativeClause;
 
   /**
@@ -278,7 +273,7 @@ class Parser {
    */
   factory Parser(Source source, AnalysisErrorListener errorListener,
       {bool useFasta}) {
-    if ((useFasta ?? false) || Parser.useFasta) {
+    if (useFasta ?? Parser.useFasta) {
       return new _Parser2(source, errorListener, allowNativeClause: true);
     } else {
       return new Parser.withoutFasta(source, errorListener);
@@ -1275,10 +1270,6 @@ class Parser {
         foundClause = false;
       }
     }
-    if (withClause != null && extendsClause == null) {
-      _reportErrorForToken(
-          ParserErrorCode.WITH_WITHOUT_EXTENDS, withClause.withKeyword);
-    }
     //
     // Look for and skip over the extra-lingual 'native' specification.
     //
@@ -1515,9 +1506,9 @@ class Parser {
           parseSimpleIdentifier(allowKeyword: true, isDeclaration: true),
           parseFormalParameterList());
     } else if (_tokenMatches(next, TokenType.OPEN_PAREN)) {
-      TypeName returnType = _parseOptionalTypeNameComment();
+      TypeName returnType = null;
       SimpleIdentifier methodName = parseSimpleIdentifier(isDeclaration: true);
-      TypeParameterList typeParameters = _parseGenericCommentTypeParameters();
+      TypeParameterList typeParameters = null;
       FormalParameterList parameters = parseFormalParameterList();
       if (_matches(TokenType.COLON) ||
           modifiers.factoryKeyword != null ||
@@ -1632,7 +1623,7 @@ class Parser {
     } else if (_tokenMatches(next, TokenType.OPEN_PAREN)) {
       SimpleIdentifier methodName =
           _parseSimpleIdentifierUnchecked(isDeclaration: true);
-      TypeParameterList typeParameters = _parseGenericCommentTypeParameters();
+      TypeParameterList typeParameters = null;
       FormalParameterList parameters = parseFormalParameterList();
       if (methodName.name == className) {
         _reportErrorForNode(ParserErrorCode.CONSTRUCTOR_WITH_RETURN_TYPE, type);
@@ -1901,7 +1892,6 @@ class Parser {
                     comment.substring(leftIndex + 1, rightIndex), nameOffset);
                 if (reference != null) {
                   references.add(reference);
-                  token.references.add(reference.beginToken);
                 }
               }
             }
@@ -1922,7 +1912,6 @@ class Parser {
             nameToken.setNext(new Token.eof(nameToken.end));
             references.add(astFactory.commentReference(
                 null, astFactory.simpleIdentifier(nameToken)));
-            token.references.add(nameToken);
             // next character
             rightIndex = leftIndex + 1;
           }
@@ -2240,7 +2229,7 @@ class Parser {
       return parseFunctionDeclaration(
           commentAndMetadata, modifiers.externalKeyword, null);
     } else if (_tokenMatches(next, TokenType.OPEN_PAREN)) {
-      TypeName returnType = _parseOptionalTypeNameComment();
+      TypeName returnType = null;
       _validateModifiersForTopLevelFunction(modifiers);
       return parseFunctionDeclaration(
           commentAndMetadata, modifiers.externalKeyword, returnType);
@@ -2388,7 +2377,7 @@ class Parser {
   Expression parseConstExpression() {
     Token keyword = getAndAdvance();
     TokenType type = _currentToken.type;
-    if (type == TokenType.LT || _injectGenericCommentTypeList()) {
+    if (type == TokenType.LT) {
       return parseListOrMapLiteral(keyword);
     } else if (type == TokenType.OPEN_SQUARE_BRACKET ||
         type == TokenType.INDEX) {
@@ -2924,18 +2913,9 @@ class Parser {
       keywordToken = getAndAdvance();
       if (_isTypedIdentifier(_currentToken)) {
         type = parseTypeAnnotation(false);
-      } else {
-        // Support `final/*=T*/ x;`
-        type = _parseOptionalTypeNameComment();
       }
     } else if (keyword == Keyword.VAR) {
       keywordToken = getAndAdvance();
-      // Support `var/*=T*/ x;`
-      type = _parseOptionalTypeNameComment();
-      if (type != null) {
-        // Clear the keyword to prevent an error.
-        keywordToken = null;
-      }
     } else if (_isTypedIdentifier(_currentToken)) {
       type = parseTypeAnnotation(false);
     } else if (inFunctionType && _matchesIdentifier()) {
@@ -2961,7 +2941,7 @@ class Parser {
     } else {
       // Support parameters such as `(/*=K*/ key, /*=V*/ value)`
       // This is not supported if the type is required.
-      type = _parseOptionalTypeNameComment();
+      type = null;
     }
     return new FinalConstVarOrType(keywordToken, type);
   }
@@ -4659,7 +4639,7 @@ class Parser {
       } finally {
         _inInitializer = wasInInitializer;
       }
-    } else if (type == TokenType.LT || _injectGenericCommentTypeList()) {
+    } else if (type == TokenType.LT) {
       if (isFunctionExpression(currentToken)) {
         return parseFunctionExpression();
       }
@@ -5288,13 +5268,7 @@ class Parser {
   // TODO(eernst): Rename this to `parseTypeNotVoidWithoutFunction`?
   // Apparently,  it was named `parseTypeName` before type arguments existed.
   TypeName parseTypeName(bool inExpression) {
-    TypeName realType = _parseTypeName(inExpression);
-    // If this is followed by a generic method type comment, allow the comment
-    // type to replace the real type name.
-    // TODO(jmesserly): this feels like a big hammer. Can we restrict it to
-    // only work inside generic methods?
-    TypeName typeFromComment = _parseOptionalTypeNameComment();
-    return typeFromComment ?? realType;
+    return _parseTypeName(inExpression);
   }
 
   /**
@@ -5769,8 +5743,7 @@ class Parser {
    */
   Token skipTypeArgumentList(Token startToken) {
     Token token = startToken;
-    if (!_tokenMatches(token, TokenType.LT) &&
-        !_injectGenericCommentTypeList()) {
+    if (!_tokenMatches(token, TokenType.LT)) {
       return null;
     }
     token = skipTypeAnnotation(token.next);
@@ -6211,49 +6184,6 @@ class Parser {
     return null;
   }
 
-  bool _injectGenericComment(TokenType type, int prefixLen) {
-    if (parseGenericMethodComments) {
-      CommentToken t = _currentToken.precedingComments;
-      for (; t != null; t = t.next) {
-        if (t.type == type) {
-          String comment = t.lexeme.substring(prefixLen, t.lexeme.length - 2);
-          Token list = _scanGenericMethodComment(comment, t.offset + prefixLen);
-          if (list != null) {
-            _reportErrorForToken(HintCode.GENERIC_METHOD_COMMENT, t);
-            // Remove the token from the comment stream.
-            t.remove();
-            // Insert the tokens into the stream.
-            _injectTokenList(list);
-            return true;
-          }
-        }
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Matches a generic comment type substitution and injects it into the token
-   * stream. Returns true if a match was injected, otherwise false.
-   *
-   * These comments are of the form `/*=T*/`, in other words, a [TypeName]
-   * inside a slash-star comment, preceded by equals sign.
-   */
-  bool _injectGenericCommentTypeAssign() {
-    return _injectGenericComment(TokenType.GENERIC_METHOD_TYPE_ASSIGN, 3);
-  }
-
-  /**
-   * Matches a generic comment type parameters and injects them into the token
-   * stream. Returns true if a match was injected, otherwise false.
-   *
-   * These comments are of the form `/*<K, V>*/`, in other words, a
-   * [TypeParameterList] or [TypeArgumentList] inside a slash-star comment.
-   */
-  bool _injectGenericCommentTypeList() {
-    return _injectGenericComment(TokenType.GENERIC_METHOD_TYPE_LIST, 2);
-  }
-
   /**
    * Inject the given [token] into the token stream immediately before the
    * current token.
@@ -6263,19 +6193,6 @@ class Parser {
     token.setNext(_currentToken);
     previous.setNext(token);
     return token;
-  }
-
-  void _injectTokenList(Token firstToken) {
-    // Scanner creates a cyclic EOF token.
-    Token lastToken = firstToken;
-    while (lastToken.next.type != TokenType.EOF) {
-      lastToken = lastToken.next;
-    }
-    // Inject these new tokens into the stream.
-    Token previous = _currentToken.previous;
-    lastToken.setNext(_currentToken);
-    previous.setNext(firstToken);
-    _currentToken = firstToken;
   }
 
   /**
@@ -7116,30 +7033,13 @@ class Parser {
   }
 
   /**
-   * Parses generic type parameters from a comment.
-   *
-   * Normally this is handled by [_parseGenericMethodTypeParameters], but if the
-   * code already handles the normal generic type parameters, the comment
-   * matcher can be called directly. For example, we may have already tried
-   * matching `<` (less than sign) in a method declaration, and be currently
-   * on the `(` (open paren) because we didn't find it. In that case, this
-   * function will parse the preceding comment such as `/*<T, R>*/`.
-   */
-  TypeParameterList _parseGenericCommentTypeParameters() {
-    if (_injectGenericCommentTypeList()) {
-      return parseTypeParameterList();
-    }
-    return null;
-  }
-
-  /**
    * Parse the generic method or function's type parameters.
    *
    * For backwards compatibility this can optionally use comments.
    * See [parseGenericMethodComments].
    */
   TypeParameterList _parseGenericMethodTypeParameters() {
-    if (_matches(TokenType.LT) || _injectGenericCommentTypeList()) {
+    if (_matches(TokenType.LT)) {
       return parseTypeParameterList();
     }
     return null;
@@ -7343,10 +7243,6 @@ class Parser {
    * advancing. Return the return type that was parsed.
    */
   TypeAnnotation _parseOptionalReturnType() {
-    TypeName typeComment = _parseOptionalTypeNameComment();
-    if (typeComment != null) {
-      return typeComment;
-    }
     Keyword keyword = _currentToken.keyword;
     if (keyword == Keyword.VOID) {
       if (_atGenericFunctionTypeAfterReturnType(_peek())) {
@@ -7388,15 +7284,8 @@ class Parser {
    * This also supports the comment form, if enabled: `/*<T>*/`
    */
   TypeArgumentList _parseOptionalTypeArguments() {
-    if (_matches(TokenType.LT) || _injectGenericCommentTypeList()) {
+    if (_matches(TokenType.LT)) {
       return parseTypeArgumentList();
-    }
-    return null;
-  }
-
-  TypeName _parseOptionalTypeNameComment() {
-    if (_injectGenericCommentTypeAssign()) {
-      return _parseTypeName(false);
     }
     return null;
   }
@@ -7467,7 +7356,7 @@ class Parser {
    */
   Identifier _parsePrefixedIdentifierAfterIdentifier(
       SimpleIdentifier qualifier) {
-    if (!_matches(TokenType.PERIOD) || _injectGenericCommentTypeList()) {
+    if (!_matches(TokenType.PERIOD)) {
       return qualifier;
     }
     Token period = getAndAdvance();
@@ -7624,11 +7513,7 @@ class Parser {
    *         qualified typeArguments?
    */
   TypeAnnotation _parseTypeAnnotationAfterIdentifier() {
-    TypeAnnotation type = parseTypeAnnotation(false);
-    // If this is followed by a generic method type comment, allow the comment
-    // type to replace the real type name.
-    TypeName typeFromComment = _parseOptionalTypeNameComment();
-    return typeFromComment ?? type;
+    return parseTypeAnnotation(false);
   }
 
   TypeName _parseTypeName(bool inExpression) {
@@ -7812,22 +7697,6 @@ class Parser {
     }
     _reportError(new AnalysisError(_source, token.offset,
         math.max(token.length, 1), errorCode, arguments));
-  }
-
-  /**
-   * Scans the generic method comment, and returns the tokens, otherwise
-   * returns null.
-   */
-  Token _scanGenericMethodComment(String code, int offset) {
-    BooleanErrorListener listener = new BooleanErrorListener();
-    Scanner scanner =
-        new Scanner(null, new SubSequenceReader(code, offset), listener);
-    scanner.setSourceStart(1, 1);
-    Token firstToken = scanner.tokenize();
-    if (listener.errorReported) {
-      return null;
-    }
-    return firstToken;
   }
 
   /**

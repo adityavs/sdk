@@ -88,8 +88,8 @@ class CodegenEnqueuerListener extends EnqueuerListener {
   }
 
   @override
-  void onQueueOpen(Enqueuer enqueuer, FunctionEntity mainMethod,
-      Iterable<LibraryEntity> libraries) {
+  void onQueueOpen(
+      Enqueuer enqueuer, FunctionEntity mainMethod, Iterable<Uri> libraries) {
     enqueuer.applyImpact(_nativeEnqueuer.processNativeClasses(libraries));
     if (mainMethod != null) {
       enqueuer.applyImpact(_computeMainImpact(mainMethod));
@@ -157,14 +157,8 @@ class CodegenEnqueuerListener extends EnqueuerListener {
     } else if (constant is InstantiationConstantValue) {
       // TODO(johnniwinther): Register these using `BackendImpact`.
       impactBuilder.registerTypeUse(new TypeUse.instantiation(
-          _elementEnvironment
-              .getThisType(_commonElements.instantiation1Class)));
-      impactBuilder.registerTypeUse(new TypeUse.instantiation(
-          _elementEnvironment
-              .getThisType(_commonElements.instantiation2Class)));
-      impactBuilder.registerTypeUse(new TypeUse.instantiation(
-          _elementEnvironment
-              .getThisType(_commonElements.instantiation2Class)));
+          _elementEnvironment.getThisType(_commonElements
+              .getInstantiationClass(constant.typeArguments.length))));
       impactBuilder.registerStaticUse(new StaticUse.staticInvoke(
           _commonElements.instantiatedGenericFunctionType,
           CallStructure.TWO_ARGS));

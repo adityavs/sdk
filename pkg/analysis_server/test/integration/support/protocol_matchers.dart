@@ -335,6 +335,7 @@ final Matcher isElement =
  *   "codeOffset": int
  *   "codeLength": int
  *   "className": optional String
+ *   "mixinName": optional String
  *   "parameters": optional String
  * }
  */
@@ -350,6 +351,7 @@ final Matcher isElementDeclaration =
           "codeLength": isInt
         }, optionalFields: {
           "className": isString,
+          "mixinName": isString,
           "parameters": isString
         }));
 
@@ -374,6 +376,7 @@ final Matcher isElementDeclaration =
  *   LIBRARY
  *   LOCAL_VARIABLE
  *   METHOD
+ *   MIXIN
  *   PARAMETER
  *   PREFIX
  *   SETTER
@@ -402,6 +405,7 @@ final Matcher isElementKind = new MatchesEnum("ElementKind", [
   "LIBRARY",
   "LOCAL_VARIABLE",
   "METHOD",
+  "MIXIN",
   "PARAMETER",
   "PREFIX",
   "SETTER",
@@ -1058,6 +1062,33 @@ final Matcher isOverride =
         }));
 
 /**
+ * ParameterInfo
+ *
+ * {
+ *   "kind": ParameterKind
+ *   "name": String
+ *   "type": String
+ *   "defaultValue": optional String
+ * }
+ */
+final Matcher isParameterInfo = new LazyMatcher(() => new MatchesJsonObject(
+    "ParameterInfo",
+    {"kind": isParameterKind, "name": isString, "type": isString},
+    optionalFields: {"defaultValue": isString}));
+
+/**
+ * ParameterKind
+ *
+ * enum {
+ *   NAMED
+ *   OPTIONAL
+ *   REQUIRED
+ * }
+ */
+final Matcher isParameterKind =
+    new MatchesEnum("ParameterKind", ["NAMED", "OPTIONAL", "REQUIRED"]);
+
+/**
  * Position
  *
  * {
@@ -1233,6 +1264,9 @@ final Matcher isRequestError = new LazyMatcher(() => new MatchesJsonObject(
  *   GET_KYTHE_ENTRIES_INVALID_FILE
  *   GET_NAVIGATION_INVALID_FILE
  *   GET_REACHABLE_SOURCES_INVALID_FILE
+ *   GET_SIGNATURE_INVALID_FILE
+ *   GET_SIGNATURE_INVALID_OFFSET
+ *   GET_SIGNATURE_UNKNOWN_FUNCTION
  *   IMPORT_ELEMENTS_INVALID_FILE
  *   INVALID_ANALYSIS_ROOT
  *   INVALID_EXECUTION_CONTEXT
@@ -1263,6 +1297,9 @@ final Matcher isRequestErrorCode = new MatchesEnum("RequestErrorCode", [
   "GET_KYTHE_ENTRIES_INVALID_FILE",
   "GET_NAVIGATION_INVALID_FILE",
   "GET_REACHABLE_SOURCES_INVALID_FILE",
+  "GET_SIGNATURE_INVALID_FILE",
+  "GET_SIGNATURE_INVALID_OFFSET",
+  "GET_SIGNATURE_UNKNOWN_FUNCTION",
   "IMPORT_ELEMENTS_INVALID_FILE",
   "INVALID_ANALYSIS_ROOT",
   "INVALID_EXECUTION_CONTEXT",
@@ -1672,6 +1709,32 @@ final Matcher isAnalysisGetReachableSourcesParams = new LazyMatcher(() =>
 final Matcher isAnalysisGetReachableSourcesResult = new LazyMatcher(() =>
     new MatchesJsonObject("analysis.getReachableSources result",
         {"sources": isMapOf(isString, isListOf(isString))}));
+
+/**
+ * analysis.getSignature params
+ *
+ * {
+ *   "file": FilePath
+ *   "offset": int
+ * }
+ */
+final Matcher isAnalysisGetSignatureParams = new LazyMatcher(() =>
+    new MatchesJsonObject(
+        "analysis.getSignature params", {"file": isFilePath, "offset": isInt}));
+
+/**
+ * analysis.getSignature result
+ *
+ * {
+ *   "name": String
+ *   "dartdoc": optional String
+ *   "parameters": List<ParameterInfo>
+ * }
+ */
+final Matcher isAnalysisGetSignatureResult = new LazyMatcher(() =>
+    new MatchesJsonObject("analysis.getSignature result",
+        {"name": isString, "parameters": isListOf(isParameterInfo)},
+        optionalFields: {"dartdoc": isString}));
 
 /**
  * analysis.highlights params
@@ -2270,12 +2333,12 @@ final Matcher isEditImportElementsParams = new LazyMatcher(() =>
  * edit.importElements result
  *
  * {
- *   "edit": SourceFileEdit
+ *   "edit": optional SourceFileEdit
  * }
  */
 final Matcher isEditImportElementsResult = new LazyMatcher(() =>
-    new MatchesJsonObject(
-        "edit.importElements result", {"edit": isSourceFileEdit}));
+    new MatchesJsonObject("edit.importElements result", null,
+        optionalFields: {"edit": isSourceFileEdit}));
 
 /**
  * edit.isPostfixCompletionApplicable params

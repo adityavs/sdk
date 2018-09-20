@@ -36,9 +36,6 @@ group("most") {
 group("runtime") {
   import("runtime/runtime_args.gni")
 
-  target_supports_aot = dart_target_arch == "arm" ||
-                        dart_target_arch == "arm64" || dart_target_arch == "x64"
-
   if (targetting_fuchsia) {
     # Fuchsia has run_vm_tests marked testonly.
     testonly = true
@@ -51,18 +48,15 @@ group("runtime") {
     "runtime/bin:sample_extension",
     "runtime/bin:test_extension",
     "runtime/vm:kernel_platform_files($host_toolchain)",
-
-    # TODO(rmacnak): Link this into 'dart'.
-    "utils/kernel-service:copy_kernel_service_snapshot",
     "utils/kernel-service:kernel-service",
   ]
-
-  if (target_supports_aot) {
-    deps += [ "runtime/bin:precompiler_entry_points_json" ]
-  }
 }
 
 group("runtime_kernel") {
+  if (targetting_fuchsia) {
+    # Fuchsia has run_vm_tests marked testonly.
+    testonly = true
+  }
   deps = [
     ":runtime",
   ]
@@ -150,47 +144,4 @@ group("compressed_observatory_archive") {
   deps = [
     "runtime/observatory:copy_compressed_observatory_archive",
   ]
-}
-
-# The rules below build a Fuchsia OS image that includes the Dart tree
-# under /system/test/dart.  To get this into the `user.bootfs` generated
-# by the Fuchsia build, add the GN build argument:
-#   extra_bootdata = [ "//third_party/dart:dart_test_bootfs" ]
-if (is_fuchsia) {
-  import("//build/config/fuchsia/bootdata.gni")
-
-  action("generate_dart_test_manifest") {
-    testonly = true
-
-    output_prefix = "$target_gen_dir/dart_test_tree"
-    outputs = [
-      "$output_prefix.manifest",
-    ]
-
-    mode = "release"
-    if (is_debug) {
-      mode = "debug"
-    }
-
-    script = "tools/gen_fuchsia_test_manifest.py"
-    args = [
-      "-m",
-      mode,
-      "-o",
-      rebase_path(output_prefix),
-    ]
-  }
-
-  bootdata("dart_test_bootfs") {
-    testonly = true
-    deps = [
-      ":generate_dart_test_manifest",
-      "runtime/bin:dart",
-      "runtime/bin:process_test",
-      "runtime/bin:run_vm_tests",
-    ]
-    inputs = [
-      "$target_gen_dir/dart_test_tree.manifest",
-    ]
-  }
 }

@@ -48,6 +48,10 @@ void Deserializer::InitializeHeader(RawObject* raw,
   tags = RawObject::SizeTag::update(size, tags);
   tags = RawObject::VMHeapObjectTag::update(is_vm_isolate, tags);
   tags = RawObject::CanonicalObjectTag::update(is_canonical, tags);
+  tags = RawObject::OldBit::update(true, tags);
+  tags = RawObject::OldAndNotMarkedBit::update(true, tags);
+  tags = RawObject::OldAndNotRememberedBit::update(true, tags);
+  tags = RawObject::NewBit::update(false, tags);
   raw->ptr()->tags_ = tags;
 #if defined(HASH_IN_OBJECT_HEADER)
   raw->ptr()->hash_ = 0;
@@ -156,7 +160,7 @@ class ClassSerializationCluster : public SerializationCluster {
     s->Write<int32_t>(cls->ptr()->next_field_offset_in_words_);
     s->Write<int32_t>(cls->ptr()->type_arguments_field_offset_in_words_);
     s->Write<uint16_t>(cls->ptr()->num_type_arguments_);
-    s->Write<uint16_t>(cls->ptr()->num_own_type_arguments_);
+    s->Write<uint16_t>(cls->ptr()->has_pragma_and_num_own_type_arguments_);
     s->Write<uint16_t>(cls->ptr()->num_native_fields_);
     s->WriteTokenPosition(cls->ptr()->token_pos_);
     s->Write<uint16_t>(cls->ptr()->state_bits_);
@@ -224,7 +228,7 @@ class ClassDeserializationCluster : public DeserializationCluster {
       }
       cls->ptr()->type_arguments_field_offset_in_words_ = d->Read<int32_t>();
       cls->ptr()->num_type_arguments_ = d->Read<uint16_t>();
-      cls->ptr()->num_own_type_arguments_ = d->Read<uint16_t>();
+      cls->ptr()->has_pragma_and_num_own_type_arguments_ = d->Read<uint16_t>();
       cls->ptr()->num_native_fields_ = d->Read<uint16_t>();
       cls->ptr()->token_pos_ = d->ReadTokenPosition();
       cls->ptr()->state_bits_ = d->Read<uint16_t>();
@@ -260,7 +264,7 @@ class ClassDeserializationCluster : public DeserializationCluster {
       cls->ptr()->next_field_offset_in_words_ = d->Read<int32_t>();
       cls->ptr()->type_arguments_field_offset_in_words_ = d->Read<int32_t>();
       cls->ptr()->num_type_arguments_ = d->Read<uint16_t>();
-      cls->ptr()->num_own_type_arguments_ = d->Read<uint16_t>();
+      cls->ptr()->has_pragma_and_num_own_type_arguments_ = d->Read<uint16_t>();
       cls->ptr()->num_native_fields_ = d->Read<uint16_t>();
       cls->ptr()->token_pos_ = d->ReadTokenPosition();
       cls->ptr()->state_bits_ = d->Read<uint16_t>();
@@ -648,6 +652,7 @@ class FunctionDeserializationCluster : public DeserializationCluster {
 
 #if defined(DEBUG)
       func->ptr()->entry_point_ = 0;
+      func->ptr()->unchecked_entry_point_ = 0;
 #endif
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
@@ -686,6 +691,10 @@ class FunctionDeserializationCluster : public DeserializationCluster {
         uword entry_point = func.raw()->ptr()->code_->ptr()->entry_point_;
         ASSERT(entry_point != 0);
         func.raw()->ptr()->entry_point_ = entry_point;
+        uword unchecked_entry_point =
+            func.raw()->ptr()->code_->ptr()->unchecked_entry_point_;
+        ASSERT(unchecked_entry_point != 0);
+        func.raw()->ptr()->unchecked_entry_point_ = unchecked_entry_point;
       }
     } else if (kind == Snapshot::kFullJIT) {
       Function& func = Function::Handle(zone);
@@ -1047,6 +1056,7 @@ class FieldSerializationCluster : public SerializationCluster {
         s->WriteTokenPosition(field->ptr()->end_token_pos_);
         s->WriteCid(field->ptr()->guarded_cid_);
         s->WriteCid(field->ptr()->is_nullable_);
+        s->Write<int8_t>(field->ptr()->static_type_exactness_state_);
 #if !defined(DART_PRECOMPILED_RUNTIME)
         s->Write<int32_t>(field->ptr()->kernel_offset_);
 #endif
@@ -1098,6 +1108,7 @@ class FieldDeserializationCluster : public DeserializationCluster {
         field->ptr()->end_token_pos_ = d->ReadTokenPosition();
         field->ptr()->guarded_cid_ = d->ReadCid();
         field->ptr()->is_nullable_ = d->ReadCid();
+        field->ptr()->static_type_exactness_state_ = d->Read<int8_t>();
 #if !defined(DART_PRECOMPILED_RUNTIME)
         field->ptr()->kernel_offset_ = d->Read<int32_t>();
 #endif
@@ -1119,6 +1130,8 @@ class FieldDeserializationCluster : public DeserializationCluster {
         field.set_guarded_list_length(Field::kNoFixedLength);
         field.set_guarded_list_length_in_object_offset(
             Field::kUnknownLengthOffset);
+        field.set_static_type_exactness_state(
+            StaticTypeExactnessState::NotTracking());
       }
     } else {
       for (intptr_t i = start_index_; i < stop_index_; i++) {
@@ -1567,7 +1580,7 @@ class KernelProgramInfoSerializationCluster : public SerializationCluster {
     objects_.Add(info);
 
     RawObject** from = info->from();
-    RawObject** to = info->to();
+    RawObject** to = info->to_snapshot(s->kind());
     for (RawObject** p = from; p <= to; p++) {
       s->Push(*p);
     }
@@ -1588,7 +1601,7 @@ class KernelProgramInfoSerializationCluster : public SerializationCluster {
     for (intptr_t i = 0; i < count; i++) {
       RawKernelProgramInfo* info = objects_[i];
       RawObject** from = info->from();
-      RawObject** to = info->to();
+      RawObject** to = info->to_snapshot(s->kind());
       for (RawObject** p = from; p <= to; p++) {
         s->WriteRef(*p);
       }
@@ -1627,9 +1640,13 @@ class KernelProgramInfoDeserializationCluster : public DeserializationCluster {
                                      KernelProgramInfo::InstanceSize(),
                                      is_vm_object);
       RawObject** from = info->from();
-      RawObject** to = info->to();
+      RawObject** to = info->to_snapshot(d->kind());
+      RawObject** end = info->to();
       for (RawObject** p = from; p <= to; p++) {
         *p = d->ReadRef();
+      }
+      for (RawObject** p = to + 1; p <= end; p++) {
+        *p = Object::null();
       }
     }
   }
@@ -1649,7 +1666,7 @@ class CodeSerializationCluster : public SerializationCluster {
     s->Push(code->ptr()->exception_handlers_);
     s->Push(code->ptr()->pc_descriptors_);
 #if defined(DART_PRECOMPILED_RUNTIME) || defined(DART_PRECOMPILER)
-    s->Push(code->ptr()->catch_entry_.catch_entry_state_maps_);
+    s->Push(code->ptr()->catch_entry_.catch_entry_moves_maps_);
 #else
     s->Push(code->ptr()->catch_entry_.variables_);
 #endif
@@ -1710,7 +1727,7 @@ class CodeSerializationCluster : public SerializationCluster {
       s->WriteRef(code->ptr()->exception_handlers_);
       s->WriteRef(code->ptr()->pc_descriptors_);
 #if defined(DART_PRECOMPILED_RUNTIME) || defined(DART_PRECOMPILER)
-      s->WriteRef(code->ptr()->catch_entry_.catch_entry_state_maps_);
+      s->WriteRef(code->ptr()->catch_entry_.catch_entry_moves_maps_);
 #else
       s->WriteRef(code->ptr()->catch_entry_.variables_);
 #endif
@@ -1765,19 +1782,23 @@ class CodeDeserializationCluster : public DeserializationCluster {
 
       RawInstructions* instr = d->ReadInstructions();
 
-      code->ptr()->entry_point_ = Instructions::UncheckedEntryPoint(instr);
-      code->ptr()->checked_entry_point_ =
-          Instructions::CheckedEntryPoint(instr);
+      code->ptr()->entry_point_ = Instructions::EntryPoint(instr);
+      code->ptr()->monomorphic_entry_point_ =
+          Instructions::MonomorphicEntryPoint(instr);
       NOT_IN_PRECOMPILED(code->ptr()->active_instructions_ = instr);
       code->ptr()->instructions_ = instr;
+      code->ptr()->unchecked_entry_point_ =
+          Instructions::UncheckedEntryPoint(instr);
 
 #if !defined(DART_PRECOMPILED_RUNTIME)
       if (d->kind() == Snapshot::kFullJIT) {
         RawInstructions* instr = d->ReadInstructions();
         code->ptr()->active_instructions_ = instr;
-        code->ptr()->entry_point_ = Instructions::UncheckedEntryPoint(instr);
-        code->ptr()->checked_entry_point_ =
-            Instructions::CheckedEntryPoint(instr);
+        code->ptr()->entry_point_ = Instructions::EntryPoint(instr);
+        code->ptr()->monomorphic_entry_point_ =
+            Instructions::MonomorphicEntryPoint(instr);
+        code->ptr()->unchecked_entry_point_ =
+            Instructions::UncheckedEntryPoint(instr);
       }
 #endif  // !DART_PRECOMPILED_RUNTIME
 
@@ -1789,7 +1810,7 @@ class CodeDeserializationCluster : public DeserializationCluster {
       code->ptr()->pc_descriptors_ =
           reinterpret_cast<RawPcDescriptors*>(d->ReadRef());
 #if defined(DART_PRECOMPILED_RUNTIME) || defined(DART_PRECOMPILER)
-      code->ptr()->catch_entry_.catch_entry_state_maps_ =
+      code->ptr()->catch_entry_.catch_entry_moves_maps_ =
           reinterpret_cast<RawTypedData*>(d->ReadRef());
 #else
       code->ptr()->catch_entry_.variables_ =
@@ -1843,10 +1864,9 @@ class ObjectPoolSerializationCluster : public SerializationCluster {
     objects_.Add(pool);
 
     intptr_t length = pool->ptr()->length_;
-    uint8_t* entry_types = pool->ptr()->entry_types();
+    uint8_t* entry_bits = pool->ptr()->entry_bits();
     for (intptr_t i = 0; i < length; i++) {
-      ObjectPool::EntryType entry_type =
-          static_cast<ObjectPool::EntryType>(entry_types[i]);
+      auto entry_type = ObjectPool::TypeBits::decode(entry_bits[i]);
       if (entry_type == ObjectPool::kTaggedObject) {
         s->Push(pool->ptr()->data()[i].raw_obj_);
       }
@@ -1871,13 +1891,11 @@ class ObjectPoolSerializationCluster : public SerializationCluster {
       RawObjectPool* pool = objects_[i];
       intptr_t length = pool->ptr()->length_;
       s->WriteUnsigned(length);
-      uint8_t* entry_types = pool->ptr()->entry_types();
+      uint8_t* entry_bits = pool->ptr()->entry_bits();
       for (intptr_t j = 0; j < length; j++) {
-        ObjectPool::EntryType entry_type =
-            static_cast<ObjectPool::EntryType>(entry_types[j]);
-        s->Write<int8_t>(entry_type);
+        s->Write<uint8_t>(entry_bits[j]);
         RawObjectPool::Entry& entry = pool->ptr()->data()[j];
-        switch (entry_type) {
+        switch (ObjectPool::TypeBits::decode(entry_bits[j])) {
           case ObjectPool::kTaggedObject: {
 #if !defined(TARGET_ARCH_DBC)
             if ((entry.raw_obj_ ==
@@ -1941,11 +1959,10 @@ class ObjectPoolDeserializationCluster : public DeserializationCluster {
           pool, kObjectPoolCid, ObjectPool::InstanceSize(length), is_vm_object);
       pool->ptr()->length_ = length;
       for (intptr_t j = 0; j < length; j++) {
-        ObjectPool::EntryType entry_type =
-            static_cast<ObjectPool::EntryType>(d->Read<int8_t>());
-        pool->ptr()->entry_types()[j] = entry_type;
+        const uint8_t entry_bits = d->Read<uint8_t>();
+        pool->ptr()->entry_bits()[j] = entry_bits;
         RawObjectPool::Entry& entry = pool->ptr()->data()[j];
-        switch (entry_type) {
+        switch (ObjectPool::TypeBits::decode(entry_bits)) {
           case ObjectPool::kTaggedObject:
             entry.raw_obj_ = d->ReadRef();
             break;
@@ -2444,7 +2461,7 @@ class ICDataSerializationCluster : public SerializationCluster {
       }
       s->Write<uint32_t>(ic->ptr()->state_bits_);
 #if defined(TAG_IC_DATA)
-      s->Write<int32_t>(ic->ptr()->tag_);
+      s->Write<int32_t>(static_cast<int32_t>(ic->ptr()->tag_));
 #endif
     }
   }
@@ -2489,7 +2506,7 @@ class ICDataDeserializationCluster : public DeserializationCluster {
       NOT_IN_PRECOMPILED(ic->ptr()->deopt_id_ = d->Read<int32_t>());
       ic->ptr()->state_bits_ = d->Read<int32_t>();
 #if defined(TAG_IC_DATA)
-      ic->ptr()->tag_ = d->Read<int32_t>();
+      ic->ptr()->tag_ = static_cast<ICData::Tag>(d->Read<int32_t>());
 #endif
     }
   }
@@ -5353,7 +5370,7 @@ RawApiError* Deserializer::VerifyVersionAndFeatures(Isolate* isolate) {
     const intptr_t kMessageBufferSize = 1024;
     char message_buffer[kMessageBufferSize];
     char* actual_features =
-        Utils::StrNDup(features, buffer_len < 128 ? buffer_len : 128);
+        Utils::StrNDup(features, buffer_len < 1024 ? buffer_len : 1024);
     Utils::SNPrint(message_buffer, kMessageBufferSize,
                    "Snapshot not compatible with the current VM configuration: "
                    "the snapshot requires '%s' but the VM has '%s'",
@@ -5567,6 +5584,7 @@ void Deserializer::ReadIsolateSnapshot(ObjectStore* object_store) {
   }
 
   thread()->isolate()->class_table()->CopySizesFromClassObjects();
+  heap_->old_space()->EvaluateSnapshotLoad();
 
 #if defined(DEBUG)
   Isolate* isolate = thread()->isolate();

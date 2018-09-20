@@ -7,7 +7,7 @@ import 'dart:convert' show json;
 import 'dart:io' show File;
 
 import 'package:analyzer/analyzer.dart'
-    show AnalysisError, CompilationUnit, ErrorSeverity, ErrorType;
+    show AnalysisError, CompilationUnit, StaticWarningCode;
 import 'package:analyzer/dart/analysis/declared_variables.dart';
 import 'package:analyzer/dart/element/element.dart'
     show LibraryElement, UriReferencedElement;
@@ -16,20 +16,17 @@ import 'package:analyzer/file_system/physical_file_system.dart'
     show PhysicalResourceProvider;
 import 'package:analyzer/src/context/builder.dart' show ContextBuilder;
 import 'package:analyzer/src/context/context.dart' show AnalysisContextImpl;
-import 'package:analyzer/src/error/codes.dart'
-    show StaticTypeWarningCode, StrongModeCode;
 import 'package:analyzer/src/generated/engine.dart'
     show AnalysisContext, AnalysisEngine;
 import 'package:analyzer/src/generated/sdk.dart' show DartSdkManager;
 import 'package:analyzer/src/generated/source.dart'
     show ContentCache, DartUriResolver;
 import 'package:analyzer/src/generated/source_io.dart'
-    show Source, SourceKind, UriResolver;
+    show SourceKind, UriResolver;
 import 'package:analyzer/src/summary/package_bundle_reader.dart'
     show InSummarySource, InputPackagesResultProvider, SummaryDataStore;
 import 'package:args/args.dart' show ArgParser, ArgResults;
 import 'package:args/src/usage_exception.dart' show UsageException;
-import 'package:func/func.dart' show Func1;
 import 'package:path/path.dart' as path;
 import 'package:source_maps/source_maps.dart';
 
@@ -42,7 +39,7 @@ import '../js_ast/js_ast.dart' show js;
 import '../js_ast/source_map_printer.dart' show SourceMapPrintingContext;
 import 'code_generator.dart' show CodeGenerator;
 import 'context.dart' show AnalyzerOptions, createSourceFactory;
-import 'error_helpers.dart' show errorSeverity, formatError, sortErrors;
+import 'error_helpers.dart';
 import 'extension_types.dart' show ExtensionTypeSet;
 
 /// Compiles a set of Dart files into a single JavaScript module.
@@ -75,7 +72,8 @@ class ModuleCompiler {
       {ResourceProvider resourceProvider,
       String analysisRoot,
       List<UriResolver> fileResolvers,
-      SummaryDataStore summaryData}) {
+      SummaryDataStore summaryData,
+      Iterable<String> summaryPaths = const []}) {
     // TODO(danrubel): refactor with analyzer CLI into analyzer common code
     AnalysisEngine.instance.processRequiredPlugins();
 
@@ -92,7 +90,7 @@ class ModuleCompiler {
     var sdkResolver = DartUriResolver(sdk);
 
     // Read the summaries.
-    summaryData ??= SummaryDataStore(options.summaryPaths,
+    summaryData ??= SummaryDataStore(summaryPaths,
         resourceProvider: resourceProvider,
         // TODO(vsm): Reset this to true once we cleanup internal build rules.
         disallowOverlappingSummaries: false);
@@ -130,21 +128,6 @@ class ModuleCompiler {
     return ModuleCompiler._(context, summaryData);
   }
 
-  bool _isFatalError(AnalysisError e, CompilerOptions options) {
-    if (errorSeverity(context, e) != ErrorSeverity.ERROR) return false;
-
-    // These errors are not fatal in the REPL compile mode as we
-    // allow access to private members across library boundaries
-    // and those accesses will show up as undefined members unless
-    // additional analyzer changes are made to support them.
-    // TODO(jacobr): consider checking that the identifier name
-    // referenced by the error is private.
-    return !options.replCompile ||
-        (e.errorCode != StaticTypeWarningCode.UNDEFINED_GETTER &&
-            e.errorCode != StaticTypeWarningCode.UNDEFINED_SETTER &&
-            e.errorCode != StaticTypeWarningCode.UNDEFINED_METHOD);
-  }
-
   /// Compiles a single Dart build unit into a JavaScript module.
   ///
   /// *Warning* - this may require resolving the entire world.
@@ -158,7 +141,7 @@ class ModuleCompiler {
 
     var compilingSdk = false;
     for (var sourcePath in unit.sources) {
-      var sourceUri = _sourceToUri(sourcePath);
+      var sourceUri = sourcePathToUri(sourcePath);
       if (sourceUri.scheme == "dart") {
         compilingSdk = true;
       }
@@ -206,40 +189,39 @@ class ModuleCompiler {
 
       var tree = context.resolveCompilationUnit(library.source, library);
       trees.add(tree);
-      errors.addAll(context.computeErrors(library.source));
+
+      var unitErrors = context.computeErrors(library.source);
+      errors.addAll(_filterJsErrors(library, unitErrors));
 
       for (var part in library.parts) {
         trees.add(context.resolveCompilationUnit(part.source, library));
-        errors.addAll(context.computeErrors(part.source));
+
+        var unitErrors = context.computeErrors(part.source);
+        errors.addAll(_filterJsErrors(library, unitErrors));
       }
     }
 
-    sortErrors(context, errors);
+    var codeGenerator =
+        CodeGenerator(context, summaryData, options, _extensionTypes, errors);
+    return codeGenerator.compile(unit, trees);
+  }
 
-    var messages = <String>[];
-    for (var e in errors) {
-      var m = formatError(context, e);
-      if (m != null) messages.add(m);
+  Iterable<AnalysisError> _filterJsErrors(
+      LibraryElement library, Iterable<AnalysisError> errors) {
+    var libraryUriStr = library.source.uri.toString();
+    if (libraryUriStr == 'dart:html' ||
+        libraryUriStr == 'dart:svg' ||
+        libraryUriStr == 'dart:_interceptors') {
+      return errors.where((error) {
+        return error.errorCode !=
+                StaticWarningCode.FINAL_NOT_INITIALIZED_CONSTRUCTOR_1 &&
+            error.errorCode !=
+                StaticWarningCode.FINAL_NOT_INITIALIZED_CONSTRUCTOR_2 &&
+            error.errorCode !=
+                StaticWarningCode.FINAL_NOT_INITIALIZED_CONSTRUCTOR_3_PLUS;
+      });
     }
-
-    if (!options.unsafeForceCompile &&
-        errors.any((e) => _isFatalError(e, options))) {
-      return JSModuleFile.invalid(unit.name, messages, options);
-    }
-
-    try {
-      var codeGenerator =
-          CodeGenerator(context, summaryData, options, _extensionTypes);
-      return codeGenerator.compile(unit, trees, messages);
-    } catch (e) {
-      if (errors.any((e) => _isFatalError(e, options))) {
-        // Force compilation failed.  Suppress the exception and report
-        // the static errors instead.
-        assert(options.unsafeForceCompile);
-        return JSModuleFile.invalid(unit.name, messages, options);
-      }
-      rethrow;
-    }
+    return errors;
   }
 }
 
@@ -252,13 +234,7 @@ bool _isDartMirrorsImort(UriReferencedElement import) {
   return import.uri == 'dart:mirrors';
 }
 
-class CompilerOptions {
-  /// Whether to emit the source mapping file.
-  ///
-  /// This supports debugging the original source code instead of the generated
-  /// code.
-  final bool sourceMap;
-
+class CompilerOptions extends SharedCompilerOptions {
   /// If [sourceMap] is emitted, this will emit a `sourceMappingUrl` comment
   /// into the output JavaScript module.
   final bool sourceMapComment;
@@ -266,77 +242,60 @@ class CompilerOptions {
   /// Whether to emit the source mapping file inline as a data url.
   final bool inlineSourceMap;
 
-  /// Whether to emit a summary file containing API signatures.
-  ///
-  /// This is required for a modular build process.
-  final bool summarizeApi;
-
   /// The file extension for summaries.
   final String summaryExtension;
 
-  /// Whether to preserve metdata only accessible via mirrors.
-  final bool emitMetadata;
-
-  // Whether to enable assertions.
-  final bool enableAsserts;
-
   /// Whether to force compilation of code with static errors.
   final bool unsafeForceCompile;
-
-  /// Whether to compile code in a more permissive REPL mode allowing access
-  /// to private members across library boundaries.
-  final bool replCompile;
-
-  /// Whether to emit Closure Compiler-friendly code.
-  final bool closure;
-
-  /// Mapping from absolute file paths to bazel short path to substitute in
-  /// source maps.
-  final Map<String, String> bazelMapping;
 
   /// If specified, the path to write the summary file.
   /// Used when building the SDK.
   final String summaryOutPath;
 
-  const CompilerOptions(
-      {this.sourceMap = true,
+  /// *deprecated* If specified, this is used to initialize the import paths for
+  /// [summaryModules].
+  final String moduleRoot;
+
+  CompilerOptions(
+      {bool sourceMap = true,
       this.sourceMapComment = true,
       this.inlineSourceMap = false,
-      this.summarizeApi = true,
+      bool summarizeApi = true,
       this.summaryExtension = 'sum',
       this.unsafeForceCompile = false,
-      this.replCompile = false,
-      this.emitMetadata = false,
-      this.enableAsserts = true,
-      this.closure = false,
-      this.bazelMapping = const {},
-      this.summaryOutPath});
+      bool replCompile = false,
+      bool emitMetadata = false,
+      bool enableAsserts = true,
+      Map<String, String> bazelMapping = const {},
+      this.summaryOutPath,
+      Map<String, String> summaryModules = const {},
+      this.moduleRoot})
+      : super(
+            sourceMap: sourceMap,
+            summarizeApi: summarizeApi,
+            emitMetadata: emitMetadata,
+            enableAsserts: enableAsserts,
+            replCompile: replCompile,
+            bazelMapping: bazelMapping,
+            summaryModules: summaryModules);
 
   CompilerOptions.fromArguments(ArgResults args)
-      : sourceMap = args['source-map'] as bool,
-        sourceMapComment = args['source-map-comment'] as bool,
+      : sourceMapComment = args['source-map-comment'] as bool,
         inlineSourceMap = args['inline-source-map'] as bool,
-        summarizeApi = args['summarize'] as bool,
         summaryExtension = args['summary-extension'] as String,
         unsafeForceCompile = args['unsafe-force-compile'] as bool,
-        replCompile = args['repl-compile'] as bool,
-        emitMetadata = args['emit-metadata'] as bool,
-        enableAsserts = args['enable-asserts'] as bool,
-        closure = args['closure-experimental'] as bool,
-        bazelMapping =
-            _parseBazelMappings(args['bazel-mapping'] as List<String>),
-        summaryOutPath = args['summary-out'] as String;
+        summaryOutPath = args['summary-out'] as String,
+        moduleRoot = args['module-root'] as String,
+        super.fromArguments(args, args['module-root'] as String,
+            args['summary-extension'] as String);
 
   static void addArguments(ArgParser parser, {bool hide = true}) {
+    SharedCompilerOptions.addArguments(parser, hide: hide);
     parser
-      ..addFlag('summarize',
-          help: 'emit an API summary file', defaultsTo: true, hide: hide)
       ..addOption('summary-extension',
           help: 'file extension for Dart summary files',
           defaultsTo: 'sum',
           hide: hide)
-      ..addFlag('source-map',
-          help: 'emit source mapping', defaultsTo: true, hide: hide)
       ..addFlag('source-map-comment',
           help: 'adds a sourceMappingURL comment to the end of the JS,\n'
               'disable if using X-SourceMap header',
@@ -344,40 +303,16 @@ class CompilerOptions {
           hide: hide)
       ..addFlag('inline-source-map',
           help: 'emit source mapping inline', defaultsTo: false, hide: hide)
-      ..addFlag('emit-metadata',
-          help: 'emit metadata annotations queriable via mirrors', hide: hide)
-      ..addFlag('enable-asserts',
-          help: 'enable assertions', defaultsTo: true, hide: hide)
-      ..addFlag('closure-experimental',
-          help: 'emit Closure Compiler-friendly code (experimental)',
-          hide: hide)
       ..addFlag('unsafe-force-compile',
           help: 'Compile code even if it has errors. ಠ_ಠ\n'
               'This has undefined behavior!',
           hide: hide)
-      ..addFlag('repl-compile',
-          help: 'Compile code more permissively when in REPL mode\n'
-              'allowing access to private members across library boundaries.',
-          hide: hide)
-      ..addMultiOption('bazel-mapping',
-          help:
-              '--bazel-mapping=genfiles/to/library.dart,to/library.dart uses \n'
-              'to/library.dart as the path for library.dart in source maps.',
-          splitCommas: false,
-          hide: hide)
       ..addOption('summary-out',
-          help: 'location to write the summary file', hide: hide);
-  }
-
-  static Map<String, String> _parseBazelMappings(List<String> argument) {
-    var mappings = <String, String>{};
-    for (var mapping in argument) {
-      var splitMapping = mapping.split(',');
-      if (splitMapping.length >= 2) {
-        mappings[path.absolute(splitMapping[0])] = splitMapping[1];
-      }
-    }
-    return mappings;
+          help: 'location to write the summary file', hide: hide)
+      ..addOption('module-root',
+          help: '(deprecated) used to determine the default module name and\n'
+              'summary import name if those are not provided.',
+          hide: hide);
   }
 }
 
@@ -396,14 +331,7 @@ class BuildUnit {
   /// that are part of a library cycle.
   final List<String> sources;
 
-  /// Given an imported library URI, this will determine to what Dart/JS module
-  /// it belongs to.
-  // TODO(jmesserly): we should replace this with another way of tracking
-  // build units.
-  final Func1<Source, String> libraryToModule;
-
-  BuildUnit(
-      String modulePath, this.libraryRoot, this.sources, this.libraryToModule)
+  BuildUnit(String modulePath, this.libraryRoot, this.sources)
       : name = '${path.toUri(modulePath)}';
 }
 
@@ -453,12 +381,9 @@ class JSModuleFile {
   //
   // TODO(jmesserly): this should match our old logic, but I'm not sure we are
   // correctly handling the pointer from the .js file to the .map file.
-  JSModuleCode getCode(ModuleFormat format, String jsUrl, String mapUrl,
-      {bool singleOutFile = false}) {
+  JSModuleCode getCode(ModuleFormat format, String jsUrl, String mapUrl) {
     var opts = JS.JavaScriptPrintingOptions(
-        emitTypes: options.closure,
-        allowKeywordsInProperties: true,
-        allowSingleLineIfStatements: true);
+        allowKeywordsInProperties: true, allowSingleLineIfStatements: true);
     JS.SimpleJavaScriptPrintingContext printer;
     SourceMapBuilder sourceMap;
     if (options.sourceMap) {
@@ -469,14 +394,13 @@ class JSModuleFile {
       printer = JS.SimpleJavaScriptPrintingContext();
     }
 
-    var tree =
-        transformModuleFormat(format, moduleTree, singleOutFile: singleOutFile);
+    var tree = transformModuleFormat(format, moduleTree);
     tree.accept(JS.Printer(opts, printer, localNamer: JS.TemporaryNamer(tree)));
 
     Map builtMap;
     if (options.sourceMap && sourceMap != null) {
-      builtMap =
-          placeSourceMap(sourceMap.build(jsUrl), mapUrl, options.bazelMapping);
+      builtMap = placeSourceMap(
+          sourceMap.build(jsUrl), mapUrl, options.bazelMapping, null);
       if (options.sourceMapComment) {
         var jsDir = path.dirname(path.fromUri(jsUrl));
         var relative = path.relative(path.fromUri(mapUrl), from: jsDir);
@@ -501,15 +425,14 @@ class JSModuleFile {
   ///
   /// If [mapPath] is not supplied but [options.sourceMap] is set, mapPath
   /// will default to [jsPath].map.
-  void writeCodeSync(ModuleFormat format, String jsPath,
-      {bool singleOutFile = false}) {
+  void writeCodeSync(ModuleFormat format, String jsPath) {
     String mapPath = jsPath + '.map';
     var code = getCode(
-        format, path.toUri(jsPath).toString(), path.toUri(mapPath).toString(),
-        singleOutFile: singleOutFile);
+        format, path.toUri(jsPath).toString(), path.toUri(mapPath).toString());
     var c = code.code;
-    if (singleOutFile) {
-      // In singleOutFile mode we wrap each module in an eval statement to
+    if (format == ModuleFormat.amdConcat ||
+        format == ModuleFormat.legacyConcat) {
+      // In single-out-file mode we wrap each module in an eval statement to
       // leverage sourceURL to improve the debugging experience when source maps
       // are not enabled.
       //
@@ -552,64 +475,3 @@ class JSModuleCode {
 
   JSModuleCode(this.code, this.sourceMap);
 }
-
-/// Adjusts the source paths in [sourceMap] to be relative to [sourceMapPath],
-/// and returns the new map.  Relative paths are in terms of URIs ('/'), not
-/// local OS paths (e.g., windows '\').
-// TODO(jmesserly): find a new home for this.
-Map placeSourceMap(
-    Map sourceMap, String sourceMapPath, Map<String, String> bazelMappings) {
-  var map = Map.from(sourceMap);
-  // Convert to a local file path if it's not.
-  sourceMapPath = path.fromUri(_sourceToUri(sourceMapPath));
-  var sourceMapDir = path.dirname(path.absolute(sourceMapPath));
-  var list = (map['sources'] as List).toList();
-  map['sources'] = list;
-
-  String makeRelative(String sourcePath) {
-    var uri = _sourceToUri(sourcePath);
-    if (uri.scheme == 'dart' || uri.scheme == 'package') return sourcePath;
-
-    // Convert to a local file path if it's not.
-    sourcePath = path.absolute(path.fromUri(uri));
-
-    // Allow bazel mappings to override.
-    var match = bazelMappings[sourcePath];
-    if (match != null) return match;
-
-    // Fall back to a relative path against the source map itself.
-    sourcePath = path.relative(sourcePath, from: sourceMapDir);
-
-    // Convert from relative local path to relative URI.
-    return path.toUri(sourcePath).path;
-  }
-
-  for (int i = 0; i < list.length; i++) {
-    list[i] = makeRelative(list[i] as String);
-  }
-  map['file'] = makeRelative(map['file'] as String);
-  return map;
-}
-
-// Convert a source string to a Uri.  The [source] may be a Dart URI, a file
-// URI, or a local win/mac/linux path.
-Uri _sourceToUri(String source) {
-  var uri = Uri.parse(source);
-  var scheme = uri.scheme;
-  switch (scheme) {
-    case "dart":
-    case "package":
-    case "file":
-      // A valid URI.
-      return uri;
-    default:
-      // Assume a file path.
-      // TODO(jmesserly): shouldn't this be `path.toUri(path.absolute)`?
-      return Uri.file(path.absolute(source));
-  }
-}
-
-const invalidImportDartMirrors = StrongModeCode(
-    ErrorType.COMPILE_TIME_ERROR,
-    'IMPORT_DART_MIRRORS',
-    'Cannot import "dart:mirrors" in web applications (https://goo.gl/R1anEs).');

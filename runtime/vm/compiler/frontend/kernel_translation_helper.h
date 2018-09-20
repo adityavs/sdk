@@ -5,6 +5,7 @@
 #ifndef RUNTIME_VM_COMPILER_FRONTEND_KERNEL_TRANSLATION_HELPER_H_
 #define RUNTIME_VM_COMPILER_FRONTEND_KERNEL_TRANSLATION_HELPER_H_
 
+#include "vm/compiler/backend/il.h"  // For CompileType.
 #include "vm/kernel.h"
 #include "vm/kernel_binary.h"
 #include "vm/object.h"
@@ -15,6 +16,7 @@ namespace dart {
 namespace kernel {
 
 class KernelReaderHelper;
+class TypeTranslator;
 
 class TranslationHelper {
  public:
@@ -146,6 +148,7 @@ class TranslationHelper {
       StringIndex constructor_name);
   RawFunction* LookupMethodByMember(NameIndex target,
                                     const String& method_name);
+  RawFunction* LookupDynamicFunction(const Class& klass, const String& name);
 
   Type& GetCanonicalType(const Class& klass);
 
@@ -186,6 +189,8 @@ class TranslationHelper {
   ExternalTypedData& metadata_payloads_;
   ExternalTypedData& metadata_mappings_;
   Array& constants_;
+
+  DISALLOW_COPY_AND_ASSIGN(TranslationHelper);
 };
 
 // Helper class that reads a kernel FunctionNode from binary.
@@ -245,6 +250,8 @@ class FunctionNodeHelper {
  private:
   KernelReaderHelper* helper_;
   intptr_t next_read_;
+
+  DISALLOW_COPY_AND_ASSIGN(FunctionNodeHelper);
 };
 
 class TypeParameterHelper {
@@ -295,6 +302,8 @@ class TypeParameterHelper {
  private:
   KernelReaderHelper* helper_;
   intptr_t next_read_;
+
+  DISALLOW_COPY_AND_ASSIGN(TypeParameterHelper);
 };
 
 // Helper class that reads a kernel VariableDeclaration from binary.
@@ -325,7 +334,7 @@ class VariableDeclarationHelper {
   };
 
   explicit VariableDeclarationHelper(KernelReaderHelper* helper)
-      : helper_(helper), next_read_(kPosition) {}
+      : annotation_count_(0), helper_(helper), next_read_(kPosition) {}
 
   void ReadUntilIncluding(Field field) {
     ReadUntilExcluding(static_cast<Field>(static_cast<int>(field) + 1));
@@ -348,10 +357,13 @@ class VariableDeclarationHelper {
   TokenPosition equals_position_;
   uint8_t flags_;
   StringIndex name_index_;
+  intptr_t annotation_count_;
 
  private:
   KernelReaderHelper* helper_;
   intptr_t next_read_;
+
+  DISALLOW_COPY_AND_ASSIGN(VariableDeclarationHelper);
 };
 
 // Helper class that reads a kernel Field from binary.
@@ -433,6 +445,8 @@ class FieldHelper {
   bool has_function_literal_initializer_;
   TokenPosition function_literal_start_;
   TokenPosition function_literal_end_;
+
+  DISALLOW_COPY_AND_ASSIGN(FieldHelper);
 };
 
 // Helper class that reads a kernel Procedure from binary.
@@ -517,6 +531,8 @@ class ProcedureHelper {
  private:
   KernelReaderHelper* helper_;
   intptr_t next_read_;
+
+  DISALLOW_COPY_AND_ASSIGN(ProcedureHelper);
 };
 
 // Helper class that reads a kernel Constructor from binary.
@@ -576,6 +592,8 @@ class ConstructorHelper {
  private:
   KernelReaderHelper* helper_;
   intptr_t next_read_;
+
+  DISALLOW_COPY_AND_ASSIGN(ConstructorHelper);
 };
 
 // Helper class that reads a kernel Class from binary.
@@ -648,6 +666,8 @@ class ClassHelper {
  private:
   KernelReaderHelper* helper_;
   intptr_t next_read_;
+
+  DISALLOW_COPY_AND_ASSIGN(ClassHelper);
 };
 
 // Helper class that reads a kernel Library from binary.
@@ -704,6 +724,8 @@ class LibraryHelper {
  private:
   KernelReaderHelper* helper_;
   intptr_t next_read_;
+
+  DISALLOW_COPY_AND_ASSIGN(LibraryHelper);
 };
 
 class LibraryDependencyHelper {
@@ -728,7 +750,7 @@ class LibraryDependencyHelper {
   };
 
   explicit LibraryDependencyHelper(KernelReaderHelper* helper)
-      : helper_(helper), next_read_(kFileOffset) {}
+      : annotation_count_(0), helper_(helper), next_read_(kFileOffset) {}
 
   void ReadUntilIncluding(Field field) {
     ReadUntilExcluding(static_cast<Field>(static_cast<int>(field) + 1));
@@ -739,10 +761,13 @@ class LibraryDependencyHelper {
   uint8_t flags_;
   StringIndex name_index_;
   NameIndex target_library_canonical_name_;
+  intptr_t annotation_count_;
 
  private:
   KernelReaderHelper* helper_;
   intptr_t next_read_;
+
+  DISALLOW_COPY_AND_ASSIGN(LibraryDependencyHelper);
 };
 
 // Base class for helpers accessing metadata of a certain kind.
@@ -776,6 +801,126 @@ class MetadataHelper {
   intptr_t mappings_num_;
   intptr_t last_node_offset_;
   intptr_t last_mapping_index_;
+
+  DISALLOW_COPY_AND_ASSIGN(MetadataHelper);
+};
+
+struct DirectCallMetadata {
+  DirectCallMetadata(const Function& target, bool check_receiver_for_null)
+      : target_(target), check_receiver_for_null_(check_receiver_for_null) {}
+
+  const Function& target_;
+  const bool check_receiver_for_null_;
+};
+
+// Helper class which provides access to direct call metadata.
+class DirectCallMetadataHelper : public MetadataHelper {
+ public:
+  static const char* tag() { return "vm.direct-call.metadata"; }
+
+  explicit DirectCallMetadataHelper(KernelReaderHelper* helper);
+
+  DirectCallMetadata GetDirectTargetForPropertyGet(intptr_t node_offset);
+  DirectCallMetadata GetDirectTargetForPropertySet(intptr_t node_offset);
+  DirectCallMetadata GetDirectTargetForMethodInvocation(intptr_t node_offset);
+
+ private:
+  bool ReadMetadata(intptr_t node_offset,
+                    NameIndex* target_name,
+                    bool* check_receiver_for_null);
+
+  DISALLOW_COPY_AND_ASSIGN(DirectCallMetadataHelper);
+};
+
+struct InferredTypeMetadata {
+  enum Flag {
+    kFlagNullable = 1 << 0,
+    kFlagInt = 1 << 1,
+  };
+
+  InferredTypeMetadata(intptr_t cid_, uint8_t flags_)
+      : cid(cid_), flags(flags_) {}
+
+  const intptr_t cid;
+  const uint8_t flags;
+
+  bool IsTrivial() const {
+    return (cid == kDynamicCid) && (flags == kFlagNullable);
+  }
+  bool IsNullable() const { return (flags & kFlagNullable) != 0; }
+  bool IsInt() const { return (flags & kFlagInt) != 0; }
+
+  CompileType ToCompileType(Zone* zone) const {
+    if (IsInt()) {
+      return CompileType::FromAbstractType(
+          Type::ZoneHandle(zone, Type::IntType()), IsNullable());
+    } else {
+      return CompileType::CreateNullable(IsNullable(), cid);
+    }
+  }
+};
+
+// Helper class which provides access to inferred type metadata.
+class InferredTypeMetadataHelper : public MetadataHelper {
+ public:
+  static const char* tag() { return "vm.inferred-type.metadata"; }
+
+  explicit InferredTypeMetadataHelper(KernelReaderHelper* helper);
+
+  InferredTypeMetadata GetInferredType(intptr_t node_offset);
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(InferredTypeMetadataHelper);
+};
+
+struct ProcedureAttributesMetadata {
+  ProcedureAttributesMetadata(bool has_dynamic_invocations = true,
+                              bool has_non_this_uses = true,
+                              bool has_tearoff_uses = true)
+      : has_dynamic_invocations(has_dynamic_invocations),
+        has_non_this_uses(has_non_this_uses),
+        has_tearoff_uses(has_tearoff_uses) {}
+  bool has_dynamic_invocations;
+  bool has_non_this_uses;
+  bool has_tearoff_uses;
+};
+
+// Helper class which provides access to direct call metadata.
+class ProcedureAttributesMetadataHelper : public MetadataHelper {
+ public:
+  static const char* tag() { return "vm.procedure-attributes.metadata"; }
+
+  explicit ProcedureAttributesMetadataHelper(KernelReaderHelper* helper);
+
+  ProcedureAttributesMetadata GetProcedureAttributes(intptr_t node_offset);
+
+ private:
+  bool ReadMetadata(intptr_t node_offset,
+                    ProcedureAttributesMetadata* metadata);
+
+  DISALLOW_COPY_AND_ASSIGN(ProcedureAttributesMetadataHelper);
+};
+
+struct CallSiteAttributesMetadata {
+  const AbstractType* receiver_type = nullptr;
+};
+
+// Helper class which provides access to direct call metadata.
+class CallSiteAttributesMetadataHelper : public MetadataHelper {
+ public:
+  static const char* tag() { return "vm.call-site-attributes.metadata"; }
+
+  CallSiteAttributesMetadataHelper(KernelReaderHelper* helper,
+                                   TypeTranslator* type_translator);
+
+  CallSiteAttributesMetadata GetCallSiteAttributes(intptr_t node_offset);
+
+ private:
+  bool ReadMetadata(intptr_t node_offset, CallSiteAttributesMetadata* metadata);
+
+  TypeTranslator& type_translator_;
+
+  DISALLOW_COPY_AND_ASSIGN(CallSiteAttributesMetadataHelper);
 };
 
 class KernelReaderHelper {
@@ -809,21 +954,28 @@ class KernelReaderHelper {
   intptr_t ReadListLength();
   virtual void ReportUnexpectedTag(const char* variant, Tag tag);
 
+  void ReadUntilFunctionNode();
+
+  Tag PeekTag(uint8_t* payload = NULL);
+
  protected:
   const Script& script() const { return script_; }
 
   virtual void set_current_script_id(intptr_t id) {
-    // Do nothing by default. This is overridden in StreamingFlowGraphBuilder.
+    // Do nothing by default.
+    // This is overridden in KernelTokenPositionCollector.
     USE(id);
   }
 
   virtual void RecordYieldPosition(TokenPosition position) {
-    // Do nothing by default. This is overridden in StreamingFlowGraphBuilder.
+    // Do nothing by default.
+    // This is overridden in KernelTokenPositionCollector.
     USE(position);
   }
 
   virtual void RecordTokenPosition(TokenPosition position) {
-    // Do nothing by default. This is overridden in StreamingFlowGraphBuilder.
+    // Do nothing by default.
+    // This is overridden in KernelTokenPositionCollector.
     USE(position);
   }
 
@@ -870,8 +1022,13 @@ class KernelReaderHelper {
   void SkipLibraryTypedef();
   TokenPosition ReadPosition(bool record = true);
   Tag ReadTag(uint8_t* payload = NULL);
-  Tag PeekTag(uint8_t* payload = NULL);
   uint8_t ReadFlags() { return reader_.ReadFlags(); }
+
+  intptr_t SourceTableSize();
+  intptr_t GetOffsetForSourceInfo(intptr_t index);
+  String& SourceTableUriFor(intptr_t index);
+  String& GetSourceFor(intptr_t index);
+  RawTypedData* GetLineStartsFor(intptr_t index);
 
   Zone* zone_;
   TranslationHelper& translation_helper_;
@@ -885,7 +1042,10 @@ class KernelReaderHelper {
   // kernel program.
   intptr_t data_program_offset_;
 
+  friend class BytecodeMetadataHelper;
   friend class ClassHelper;
+  friend class CallSiteAttributesMetadataHelper;
+  friend class ConstantEvaluator;
   friend class ConstantHelper;
   friend class ConstructorHelper;
   friend class DirectCallMetadataHelper;
@@ -899,15 +1059,207 @@ class KernelReaderHelper {
   friend class ProcedureAttributesMetadataHelper;
   friend class ProcedureHelper;
   friend class SimpleExpressionConverter;
-  friend class StreamingConstantEvaluator;
-  friend class StreamingScopeBuilder;
+  friend class ScopeBuilder;
   friend class TypeParameterHelper;
   friend class TypeTranslator;
   friend class VariableDeclarationHelper;
+  friend bool NeedsDynamicInvocationForwarder(const Function& function);
 
-#if defined(DART_USE_INTERPRETER)
-  friend class BytecodeMetadataHelper;
-#endif  // defined(DART_USE_INTERPRETER)
+ private:
+  DISALLOW_COPY_AND_ASSIGN(KernelReaderHelper);
+};
+
+class ActiveClass {
+ public:
+  ActiveClass()
+      : klass(NULL),
+        member(NULL),
+        enclosing(NULL),
+        local_type_parameters(NULL) {}
+
+  bool HasMember() { return member != NULL; }
+
+  bool MemberIsProcedure() {
+    ASSERT(member != NULL);
+    RawFunction::Kind function_kind = member->kind();
+    return function_kind == RawFunction::kRegularFunction ||
+           function_kind == RawFunction::kGetterFunction ||
+           function_kind == RawFunction::kSetterFunction ||
+           function_kind == RawFunction::kMethodExtractor ||
+           function_kind == RawFunction::kDynamicInvocationForwarder ||
+           member->IsFactory();
+  }
+
+  bool MemberIsFactoryProcedure() {
+    ASSERT(member != NULL);
+    return member->IsFactory();
+  }
+
+  intptr_t MemberTypeParameterCount(Zone* zone);
+
+  intptr_t ClassNumTypeArguments() {
+    ASSERT(klass != NULL);
+    return klass->NumTypeArguments();
+  }
+
+  const char* ToCString() {
+    return member != NULL ? member->ToCString() : klass->ToCString();
+  }
+
+  // The current enclosing class (or the library top-level class).
+  const Class* klass;
+
+  const Function* member;
+
+  // The innermost enclosing function. This is used for building types, as a
+  // parent for function types.
+  const Function* enclosing;
+
+  const TypeArguments* local_type_parameters;
+};
+
+class ActiveClassScope {
+ public:
+  ActiveClassScope(ActiveClass* active_class, const Class* klass)
+      : active_class_(active_class), saved_(*active_class) {
+    active_class_->klass = klass;
+  }
+
+  ~ActiveClassScope() { *active_class_ = saved_; }
+
+ private:
+  ActiveClass* active_class_;
+  ActiveClass saved_;
+
+  DISALLOW_COPY_AND_ASSIGN(ActiveClassScope);
+};
+
+class ActiveMemberScope {
+ public:
+  ActiveMemberScope(ActiveClass* active_class, const Function* member)
+      : active_class_(active_class), saved_(*active_class) {
+    // The class is inherited.
+    active_class_->member = member;
+  }
+
+  ~ActiveMemberScope() { *active_class_ = saved_; }
+
+ private:
+  ActiveClass* active_class_;
+  ActiveClass saved_;
+
+  DISALLOW_COPY_AND_ASSIGN(ActiveMemberScope);
+};
+
+class ActiveTypeParametersScope {
+ public:
+  // Set the local type parameters of the ActiveClass to be exactly all type
+  // parameters defined by 'innermost' and any enclosing *closures* (but not
+  // enclosing methods/top-level functions/classes).
+  //
+  // Also, the enclosing function is set to 'innermost'.
+  ActiveTypeParametersScope(ActiveClass* active_class,
+                            const Function& innermost,
+                            Zone* Z);
+
+  // Append the list of the local type parameters to the list in ActiveClass.
+  //
+  // Also, the enclosing function is set to 'function'.
+  ActiveTypeParametersScope(ActiveClass* active_class,
+                            const Function* function,
+                            const TypeArguments& new_params,
+                            Zone* Z);
+
+  ~ActiveTypeParametersScope() { *active_class_ = saved_; }
+
+ private:
+  ActiveClass* active_class_;
+  ActiveClass saved_;
+
+  DISALLOW_COPY_AND_ASSIGN(ActiveTypeParametersScope);
+};
+
+class TypeTranslator {
+ public:
+  TypeTranslator(KernelReaderHelper* helper,
+                 ActiveClass* active_class,
+                 bool finalize = false);
+
+  // Can return a malformed type.
+  AbstractType& BuildType();
+  // Can return a malformed type.
+  AbstractType& BuildTypeWithoutFinalization();
+  // Is guaranteed to be not malformed.
+  AbstractType& BuildVariableType();
+
+  // Will return `TypeArguments::null()` in case any of the arguments are
+  // malformed.
+  const TypeArguments& BuildTypeArguments(intptr_t length);
+
+  // Will return `TypeArguments::null()` in case any of the arguments are
+  // malformed.
+  const TypeArguments& BuildInstantiatedTypeArguments(
+      const Class& receiver_class,
+      intptr_t length);
+
+  void LoadAndSetupTypeParameters(ActiveClass* active_class,
+                                  const Object& set_on,
+                                  intptr_t type_parameter_count,
+                                  const Function& parameterized_function);
+
+  const Type& ReceiverType(const Class& klass);
+
+  void SetupFunctionParameters(const Class& klass,
+                               const Function& function,
+                               bool is_method,
+                               bool is_closure,
+                               FunctionNodeHelper* function_node_helper);
+
+ private:
+  // Can build a malformed type.
+  void BuildTypeInternal(bool invalid_as_dynamic = false);
+  void BuildInterfaceType(bool simple);
+  void BuildFunctionType(bool simple);
+  void BuildTypeParameterType();
+
+  class TypeParameterScope {
+   public:
+    TypeParameterScope(TypeTranslator* translator, intptr_t parameter_count)
+        : parameter_count_(parameter_count),
+          outer_(translator->type_parameter_scope_),
+          translator_(translator) {
+      outer_parameter_count_ = 0;
+      if (outer_ != NULL) {
+        outer_parameter_count_ =
+            outer_->outer_parameter_count_ + outer_->parameter_count_;
+      }
+      translator_->type_parameter_scope_ = this;
+    }
+    ~TypeParameterScope() { translator_->type_parameter_scope_ = outer_; }
+
+    TypeParameterScope* outer() const { return outer_; }
+    intptr_t parameter_count() const { return parameter_count_; }
+    intptr_t outer_parameter_count() const { return outer_parameter_count_; }
+
+   private:
+    intptr_t parameter_count_;
+    intptr_t outer_parameter_count_;
+    TypeParameterScope* outer_;
+    TypeTranslator* translator_;
+  };
+
+  KernelReaderHelper* helper_;
+  TranslationHelper& translation_helper_;
+  ActiveClass* const active_class_;
+  TypeParameterScope* type_parameter_scope_;
+  Zone* zone_;
+  AbstractType& result_;
+  bool finalize_;
+
+  friend class ScopeBuilder;
+  friend class KernelLoader;
+
+  DISALLOW_COPY_AND_ASSIGN(TypeTranslator);
 };
 
 }  // namespace kernel

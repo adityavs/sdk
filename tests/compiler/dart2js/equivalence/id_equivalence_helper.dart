@@ -14,7 +14,7 @@ import 'package:compiler/src/elements/entities.dart';
 import 'package:expect/expect.dart';
 import 'package:sourcemap_testing/src/annotated_code_helper.dart';
 
-import '../memory_compiler.dart';
+import '../helpers/memory_compiler.dart';
 import '../equivalence/id_equivalence.dart';
 
 /// `true` if ANSI colors are supported by stdout.
@@ -78,24 +78,14 @@ String colorizeAnnotation(String start, String text, String end) {
   return '${colorizeDelimiter(start)}$text${colorizeDelimiter(end)}';
 }
 
-/// Function that computes a data mapping for [member].
-///
-/// Fills [actualMap] with the data and [sourceSpanMap] with the source spans
-/// for the data origin.
-typedef void ComputeMemberDataFunction(
-    Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
-    {bool verbose});
-
-/// Function that computes a data mapping for [cls].
-///
-/// Fills [actualMap] with the data and [sourceSpanMap] with the source spans
-/// for the data origin.
-typedef void ComputeClassDataFunction(
-    Compiler compiler, ClassEntity cls, Map<Id, ActualData> actualMap,
-    {bool verbose});
-
 abstract class DataComputer {
-  void setup();
+  const DataComputer();
+
+  /// Called before testing to setup flags needed for data collection.
+  void setup() {}
+
+  /// Called before testing to setup flags needed for data collection.
+  void onCompilation(Compiler compiler) {}
 
   /// Function that computes a data mapping for [member].
   ///
@@ -105,13 +95,16 @@ abstract class DataComputer {
       Compiler compiler, MemberEntity member, Map<Id, ActualData> actualMap,
       {bool verbose});
 
+  /// Returns `true` if [computeClassData] is supported.
+  bool get computesClassData => false;
+
   /// Function that computes a data mapping for [cls].
   ///
   /// Fills [actualMap] with the data and [sourceSpanMap] with the source spans
   /// for the data origin.
   void computeClassData(
       Compiler compiler, ClassEntity cls, Map<Id, ActualData> actualMap,
-      {bool verbose});
+      {bool verbose}) {}
 }
 
 const String stopAfterTypeInference = 'stopAfterTypeInference';
@@ -137,17 +130,14 @@ const String trustName = 'strong mode without implicit checks';
 /// [entryPoint] and [memorySourceFiles].
 ///
 /// Actual data is computed using [computeMemberData].
-Future<CompiledData> computeData(
-    Uri entryPoint,
-    Map<String, String> memorySourceFiles,
-    ComputeMemberDataFunction computeMemberData,
+Future<CompiledData> computeData(Uri entryPoint,
+    Map<String, String> memorySourceFiles, DataComputer dataComputer,
     {List<String> options: const <String>[],
     bool verbose: false,
     bool testFrontend: false,
     bool forUserLibrariesOnly: true,
     bool skipUnprocessedMembers: false,
     bool skipFailedCompilations: false,
-    ComputeClassDataFunction computeClassData,
     Iterable<Id> globalIds: const <Id>[]}) async {
   CompilationResult result = await runCompiler(
       entryPoint: entryPoint,
@@ -162,6 +152,7 @@ Future<CompiledData> computeData(
     Expect.isTrue(result.isSuccess, "Unexpected compilation error.");
   }
   Compiler compiler = result.compiler;
+  dataComputer.onCompilation(compiler);
   dynamic closedWorld = testFrontend
       ? compiler.resolutionWorldBuilder.closedWorldForTesting
       : compiler.backendClosedWorldForTesting;
@@ -199,14 +190,15 @@ Future<CompiledData> computeData(
         return;
       }
     }
-    computeMemberData(compiler, member, actualMap, verbose: verbose);
+    dataComputer.computeMemberData(compiler, member, actualMap,
+        verbose: verbose);
   }
 
   void processClass(ClassEntity cls, Map<Id, ActualData> actualMap) {
     if (skipUnprocessedMembers && !closedWorld.isImplemented(cls)) {
       return;
     }
-    computeClassData(compiler, cls, actualMap, verbose: verbose);
+    dataComputer.computeClassData(compiler, cls, actualMap, verbose: verbose);
   }
 
   bool excludeLibrary(LibraryEntity library) {
@@ -215,7 +207,7 @@ Future<CompiledData> computeData(
             library.canonicalUri.scheme == 'package');
   }
 
-  if (computeClassData != null) {
+  if (dataComputer.computesClassData) {
     for (LibraryEntity library in elementEnvironment.libraries) {
       if (excludeLibrary(library)) continue;
       elementEnvironment.forEachClass(library, (ClassEntity cls) {
@@ -280,7 +272,7 @@ Future<CompiledData> computeData(
       }
       processMember(member, globalData);
     } else if (id is ClassId) {
-      if (computeClassData != null) {
+      if (dataComputer.computesClassData) {
         ClassEntity cls = getGlobalClass(id.className);
         processClass(cls, globalData);
       }
@@ -500,10 +492,8 @@ typedef void Callback();
 /// [setUpFunction] is called once for every test that is executed.
 /// If [forUserSourceFilesOnly] is true, we examine the elements in the main
 /// file and any supporting libraries.
-Future checkTests(
-    Directory dataDir, ComputeMemberDataFunction computeFromKernel,
+Future checkTests(Directory dataDir, DataComputer dataComputer,
     {bool testStrongMode: true,
-    List<String> skipForKernel: const <String>[],
     List<String> skipForStrong: const <String>[],
     bool filterActualData(IdValue idValue, ActualData actualData),
     List<String> options: const <String>[],
@@ -512,11 +502,12 @@ Future checkTests(
     bool testFrontend: false,
     bool forUserLibrariesOnly: true,
     Callback setUpFunction,
-    ComputeClassDataFunction computeClassDataFromKernel,
     int shards: 1,
     int shardIndex: 0,
     bool testOmit: false,
     void onTest(Uri uri)}) async {
+  dataComputer.setup();
+
   args = args.toList();
   bool verbose = args.remove('-v');
   bool shouldContinue = args.remove('-c');
@@ -539,15 +530,13 @@ Future checkTests(
     if (shouldContinue) continued = true;
     testCount++;
     List<String> testOptions = options.toList();
-    bool strongModeOnlyTest = false;
     bool trustTypeAnnotations = false;
     if (name.endsWith('_ea.dart')) {
       testOptions.add(Flags.enableAsserts);
     }
     if (name.contains('_strong')) {
-      strongModeOnlyTest = true;
       if (!testStrongMode) {
-        testOptions.add(Flags.strongMode);
+        // TODO(johnniwinther): Remove irrelevant tests.
       }
     }
     if (name.endsWith('_checked.dart')) {
@@ -574,7 +563,6 @@ Future checkTests(
           new AnnotatedCode.fromText(annotatedCode, commentStart, commentEnd)
     };
     Map<String, MemberAnnotations<IdValue>> expectedMaps = {
-      kernelMarker: new MemberAnnotations<IdValue>(),
       strongMarker: new MemberAnnotations<IdValue>(),
       omitMarker: new MemberAnnotations<IdValue>(),
     };
@@ -605,44 +593,18 @@ Future checkTests(
 
     if (setUpFunction != null) setUpFunction();
 
-    if (skipForKernel.contains(name) ||
-        (testStrongMode && strongModeOnlyTest)) {
-      print('--skipped for kernel--------------------------------------------');
-    } else {
-      print('--from kernel---------------------------------------------------');
-      List<String> options = [Flags.noPreviewDart2]..addAll(testOptions);
-      if (trustTypeAnnotations) {
-        options.add(Flags.trustTypeAnnotations);
-      }
-      MemberAnnotations<IdValue> annotations = expectedMaps[kernelMarker];
-      CompiledData compiledData2 = await computeData(
-          entryPoint, memorySourceFiles, computeFromKernel,
-          computeClassData: computeClassDataFromKernel,
-          options: options,
-          verbose: verbose,
-          testFrontend: testFrontend,
-          forUserLibrariesOnly: forUserLibrariesOnly,
-          globalIds: annotations.globalData.keys);
-      if (await checkCode(
-          kernelName, entity.uri, code, annotations, compiledData2,
-          filterActualData: filterActualData,
-          fatalErrors: !testAfterFailures)) {
-        hasFailures = true;
-      }
-    }
     if (testStrongMode) {
       if (skipForStrong.contains(name)) {
         print('--skipped for kernel (strong mode)----------------------------');
       } else {
         print('--from kernel (strong mode)-----------------------------------');
-        List<String> options = [Flags.strongMode]..addAll(testOptions);
+        List<String> options = new List<String>.from(testOptions);
         if (trustTypeAnnotations && !testOmit) {
           options.add(Flags.omitImplicitChecks);
         }
         MemberAnnotations<IdValue> annotations = expectedMaps[strongMarker];
         CompiledData compiledData2 = await computeData(
-            entryPoint, memorySourceFiles, computeFromKernel,
-            computeClassData: computeClassDataFromKernel,
+            entryPoint, memorySourceFiles, dataComputer,
             options: options,
             verbose: verbose,
             testFrontend: testFrontend,
@@ -662,14 +624,12 @@ Future checkTests(
       } else {
         print('--from kernel (strong mode, omit-implicit-checks)-------------');
         List<String> options = [
-          Flags.strongMode,
           Flags.omitImplicitChecks,
           Flags.laxRuntimeTypeToString
         ]..addAll(testOptions);
         MemberAnnotations<IdValue> annotations = expectedMaps[omitMarker];
         CompiledData compiledData2 = await computeData(
-            entryPoint, memorySourceFiles, computeFromKernel,
-            computeClassData: computeClassDataFromKernel,
+            entryPoint, memorySourceFiles, dataComputer,
             options: options,
             verbose: verbose,
             testFrontend: testFrontend,
@@ -843,7 +803,6 @@ Spannable computeSpannable(
   throw new UnsupportedError('Unsupported id $id.');
 }
 
-const String kernelMarker = 'kernel.';
 const String strongMarker = 'strong.';
 const String omitMarker = 'omit.';
 
@@ -862,7 +821,7 @@ const String omitMarker = 'omit.';
 /// annotations without prefixes.
 void computeExpectedMap(Uri sourceUri, AnnotatedCode code,
     Map<String, MemberAnnotations<IdValue>> maps) {
-  List<String> mapKeys = [kernelMarker, strongMarker, omitMarker];
+  List<String> mapKeys = [strongMarker, omitMarker];
   Map<String, AnnotatedCode> split = splitByPrefixes(code, mapKeys);
 
   split.forEach((String marker, AnnotatedCode code) {

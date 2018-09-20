@@ -10,6 +10,7 @@ import '../types/abstract_value_domain.dart';
 import '../universe/selector.dart';
 import '../universe/side_effects.dart';
 import '../world.dart';
+import 'annotations.dart';
 
 abstract class InferredData {
   /// Returns the side effects of executing [element].
@@ -163,7 +164,10 @@ class InferredDataBuilderImpl implements InferredDataBuilder {
   final Set<FunctionEntity> _functionsThatMightBePassedToApply =
       new Set<FunctionEntity>();
 
-  InferredDataBuilderImpl();
+  InferredDataBuilderImpl(AnnotationsData annotationsData) {
+    annotationsData.cannotThrowFunctions.forEach(registerCannotThrow);
+    annotationsData.sideEffectFreeFunctions.forEach(registerSideEffectsFree);
+  }
 
   @override
   SideEffectsBuilder getSideEffectsBuilder(MemberEntity member) {
@@ -241,5 +245,29 @@ class InferredDataBuilderImpl implements InferredDataBuilder {
   @override
   bool getCurrentlyKnownMightBePassedToApply(FunctionEntity element) {
     return _functionsThatMightBePassedToApply.contains(element);
+  }
+}
+
+class TrivialInferredData implements InferredData {
+  final SideEffects _allSideEffects = new SideEffects();
+
+  @override
+  SideEffects getSideEffectsOfElement(FunctionEntity element) {
+    return _allSideEffects;
+  }
+
+  @override
+  bool getMightBePassedToApply(FunctionEntity element) => true;
+
+  @override
+  bool isCalledInLoop(MemberEntity element) => true;
+
+  @override
+  bool getCannotThrow(FunctionEntity element) => false;
+
+  @override
+  SideEffects getSideEffectsOfSelector(
+      Selector selector, AbstractValue receiver) {
+    return _allSideEffects;
   }
 }

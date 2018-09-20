@@ -44,9 +44,9 @@ class AnalysisContextFactory {
    * system.
    */
   static InternalAnalysisContext contextWithCore(
-      {ResourceProvider resourceProvider}) {
+      {UriResolver contributedResolver, ResourceProvider resourceProvider}) {
     AnalysisContextForTests context = new AnalysisContextForTests();
-    return initContextWithCore(context, null, resourceProvider);
+    return initContextWithCore(context, contributedResolver, resourceProvider);
   }
 
   /**
@@ -99,8 +99,6 @@ class AnalysisContextFactory {
     SourceFactory sourceFactory = new SourceFactory(resolvers);
     context.sourceFactory = sourceFactory;
     AnalysisContext coreContext = sdk.context;
-    (coreContext.analysisOptions as AnalysisOptionsImpl).strongMode =
-        context.analysisOptions.strongMode;
     //
     // dart:core
     //
@@ -145,8 +143,9 @@ class AnalysisContextFactory {
       ElementFactory.functionElement3("print", VoidTypeImpl.instance,
           <ClassElement>[objectClassElement], null)
     ];
-    TopLevelVariableElement proxyTopLevelVariableElt = ElementFactory
-        .topLevelVariableElement3("proxy", true, false, proxyClassElement.type);
+    TopLevelVariableElement proxyTopLevelVariableElt =
+        ElementFactory.topLevelVariableElement3(
+            "proxy", true, false, proxyClassElement.type);
     ConstTopLevelVariableElementImpl deprecatedTopLevelVariableElt =
         ElementFactory.topLevelVariableElement3(
             "deprecated", true, false, provider.deprecatedType);
@@ -155,8 +154,8 @@ class AnalysisContextFactory {
             "override", true, false, overrideClassElement.type);
     {
       ClassElement deprecatedElement = provider.deprecatedType.element;
-      InstanceCreationExpression initializer = AstTestFactory
-          .instanceCreationExpression2(
+      InstanceCreationExpression initializer =
+          AstTestFactory.instanceCreationExpression2(
               Keyword.CONST,
               AstTestFactory.typeName(deprecatedElement),
               [AstTestFactory.string2('next release')]);
@@ -207,17 +206,15 @@ class AnalysisContextFactory {
     //   Future<R> then<R>(FutureOr<R> onValue(T value), { Function onError });
     TypeDefiningElement futureThenR = DynamicElementImpl.instance;
     DartType onValueReturnType = DynamicTypeImpl.instance;
-    if (context.analysisOptions.strongMode) {
-      futureThenR = ElementFactory.typeParameterWithType('R');
-      onValueReturnType = futureOrElement.type.instantiate([futureThenR.type]);
-    }
+    futureThenR = ElementFactory.typeParameterWithType('R');
+    onValueReturnType = futureOrElement.type.instantiate([futureThenR.type]);
     FunctionElementImpl thenOnValue = ElementFactory.functionElement3(
         'onValue', onValueReturnType, [futureElement.typeParameters[0]], null);
     thenOnValue.isSynthetic = true;
 
     DartType futureRType = futureElement.type.instantiate([futureThenR.type]);
-    MethodElementImpl thenMethod = ElementFactory
-        .methodElementWithParameters(futureElement, "then", futureRType, [
+    MethodElementImpl thenMethod = ElementFactory.methodElementWithParameters(
+        futureElement, "then", futureRType, [
       ElementFactory.requiredParameter2("onValue", thenOnValue.type),
       ElementFactory.namedParameter2("onError", provider.functionType)
     ]);
@@ -309,8 +306,8 @@ class AnalysisContextFactory {
     ClassElementImpl htmlDocumentElement =
         ElementFactory.classElement("HtmlDocument", documentElement.type);
     htmlDocumentElement.methods = <MethodElement>[
-      ElementFactory
-          .methodElement("query", elementType, <DartType>[provider.stringType])
+      ElementFactory.methodElement(
+          "query", elementType, <DartType>[provider.stringType])
     ];
     htmlUnit.types = <ClassElement>[
       ElementFactory.classElement("AnchorElement", elementType),
@@ -328,7 +325,7 @@ class AnalysisContextFactory {
     ];
     htmlUnit.functions = <FunctionElement>[
       ElementFactory.functionElement3("query", elementElement.type,
-          <ClassElement>[provider.stringType.element], ClassElement.EMPTY_LIST)
+          <ClassElement>[provider.stringType.element], const <ClassElement>[])
     ];
     TopLevelVariableElementImpl document =
         ElementFactory.topLevelVariableElement3(
@@ -350,13 +347,14 @@ class AnalysisContextFactory {
         "cos",
         provider.doubleType,
         <ClassElement>[provider.numType.element],
-        ClassElement.EMPTY_LIST);
-    TopLevelVariableElement ln10Element = ElementFactory
-        .topLevelVariableElement3("LN10", true, false, provider.doubleType);
+        const <ClassElement>[]);
+    TopLevelVariableElement ln10Element =
+        ElementFactory.topLevelVariableElement3(
+            "LN10", true, false, provider.doubleType);
     TypeParameterElement maxT =
         ElementFactory.typeParameterWithType('T', provider.numType);
     FunctionElementImpl maxElement = ElementFactory.functionElement3(
-        "max", maxT.type, [maxT, maxT], ClassElement.EMPTY_LIST);
+        "max", maxT.type, [maxT, maxT], const <ClassElement>[]);
     maxElement.typeParameters = [maxT];
     maxElement.type = new FunctionTypeImpl(maxElement);
     TopLevelVariableElement piElement = ElementFactory.topLevelVariableElement3(
@@ -375,12 +373,12 @@ class AnalysisContextFactory {
         "sin",
         provider.doubleType,
         <ClassElement>[provider.numType.element],
-        ClassElement.EMPTY_LIST);
+        const <ClassElement>[]);
     FunctionElement sqrtElement = ElementFactory.functionElement3(
         "sqrt",
         provider.doubleType,
         <ClassElement>[provider.numType.element],
-        ClassElement.EMPTY_LIST);
+        const <ClassElement>[]);
     mathUnit.accessors = <PropertyAccessorElement>[
       ln10Element.getter,
       piElement.getter

@@ -2,6 +2,8 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+import '../scanner/error_token.dart' show UnmatchedToken;
+
 import '../../scanner/token.dart'
     show
         BeginToken,
@@ -11,8 +13,6 @@ import '../../scanner/token.dart'
         SyntheticToken,
         Token,
         TokenType;
-
-import 'util.dart' show optional;
 
 /// Provides the capability of inserting tokens into a token stream. This
 /// implementation does this by rewriting the previous token to point to the
@@ -55,44 +55,52 @@ class TokenStreamRewriter {
     next = next.setNext(new SyntheticToken(TokenType.CLOSE_PAREN, offset));
     leftParen.endGroup = next;
     next.setNext(token.next);
+
+    // A no-op rewriter could skip this step.
     token.setNext(leftParen);
+
     return leftParen;
   }
 
   /// Insert a synthetic identifier after [token] and return the new identifier.
   Token insertSyntheticIdentifier(Token token) {
-    Token identifier = new SyntheticStringToken(
-        TokenType.IDENTIFIER, '', token.next.charOffset, 0)
-      ..setNext(token.next);
-
-    // A no-op rewriter could simply return the synthetic identifier here.
-
-    token.setNext(identifier);
-    return identifier;
+    return insertToken(
+        token,
+        new SyntheticStringToken(
+            TokenType.IDENTIFIER, '', token.next.charOffset, 0));
   }
 
-  /// Insert the chain of tokens starting at the [insertedToken] immediately
-  /// after the [previousToken]. Return the [previousToken].
-  Token insertTokenAfter(Token previousToken, Token insertedToken) {
-    Token afterToken = previousToken.next;
-    previousToken.setNext(insertedToken);
+  /// Insert [newToken] after [token] and return [newToken].
+  Token insertToken(Token token, Token newToken) {
+    newToken.setNext(token.next);
 
-    Token lastReplacement = _lastTokenInChain(insertedToken);
-    lastReplacement.setNext(afterToken);
+    // A no-op rewriter could skip this step.
+    token.setNext(newToken);
 
-    return previousToken;
+    return newToken;
   }
 
-  /// Move [endGroup] (a synthetic `)`, `]`, `}`, or `>` token) after [token]
-  /// in the token stream and return [endGroup].
+  /// Move [endGroup] (a synthetic `)`, `]`, or `}` token) and associated
+  /// error token after [token] in the token stream and return [endGroup].
   Token moveSynthetic(Token token, Token endGroup) {
     assert(endGroup.beforeSynthetic != null);
+    Token errorToken;
+    if (endGroup.next is UnmatchedToken) {
+      errorToken = endGroup.next;
+    }
 
+    // Remove endGroup from its current location
+    endGroup.beforeSynthetic.setNext((errorToken ?? endGroup).next);
+
+    // Insert endGroup into its new location
     Token next = token.next;
-    endGroup.beforeSynthetic.setNext(endGroup.next);
     token.setNext(endGroup);
-    endGroup.setNext(next);
+    (errorToken ?? endGroup).setNext(next);
     endGroup.offset = next.offset;
+    if (errorToken != null) {
+      errorToken.offset = next.offset;
+    }
+
     return endGroup;
   }
 
@@ -109,50 +117,6 @@ class TokenStreamRewriter {
     _lastTokenInChain(replacementToken).setNext(replacedToken.next);
 
     return replacementToken;
-  }
-
-  /// Split a `>>` token into two separate `>` tokens, updates the token stream,
-  /// and returns the first `>`. If [start].endGroup is `>>` then sets
-  /// [start].endGroup to the second `>` but does not set the inner group's
-  /// endGroup, otherwise sets [start].endGroup to the first `>`.
-  Token splitEndGroup(BeginToken start, [Token end]) {
-    end ??= start.endGroup;
-    assert(end != null);
-
-    Token gt;
-    if (optional('>>', end)) {
-      gt = new SimpleToken(TokenType.GT, end.charOffset, end.precedingComments)
-        ..setNext(new SimpleToken(TokenType.GT, end.charOffset + 1)
-          ..setNext(end.next));
-    } else if (optional('>=', end)) {
-      gt = new SimpleToken(TokenType.GT, end.charOffset, end.precedingComments)
-        ..setNext(new SimpleToken(TokenType.EQ, end.charOffset + 1)
-          ..setNext(end.next));
-    } else if (optional('>>=', end)) {
-      gt = new SimpleToken(TokenType.GT, end.charOffset, end.precedingComments)
-        ..setNext(new SimpleToken(TokenType.GT, end.charOffset + 1)
-          ..setNext(new SimpleToken(TokenType.EQ, end.charOffset + 2)
-            ..setNext(end.next)));
-    } else {
-      gt = new SyntheticToken(TokenType.GT, end.charOffset)..setNext(end);
-    }
-
-    Token token = start;
-    Token next = token.next;
-    while (!identical(next, end)) {
-      token = next;
-      next = token.next;
-    }
-    token.setNext(gt);
-
-    if (start.endGroup != null) {
-      assert(optional('>>', start.endGroup));
-      start.endGroup = gt.next;
-    } else {
-      // Recovery
-      start.endGroup = gt;
-    }
-    return gt;
   }
 
   /// Given the [firstToken] in a chain of tokens to be inserted, return the

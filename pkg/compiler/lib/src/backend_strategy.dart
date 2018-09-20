@@ -43,7 +43,8 @@ abstract class BackendStrategy {
       SelectorConstraintsStrategy selectorConstraintsStrategy);
 
   /// Creates the [WorkItemBuilder] used by the codegen enqueuer.
-  WorkItemBuilder createCodegenWorkItemBuilder(JClosedWorld closedWorld);
+  WorkItemBuilder createCodegenWorkItemBuilder(JClosedWorld closedWorld,
+      GlobalTypeInferenceResults globalInferenceResults);
 
   /// Creates the [SsaBuilder] used for the element model.
   SsaBuilder createSsaBuilder(CompilerTask task, JavaScriptBackend backend,
@@ -57,6 +58,5 @@ abstract class BackendStrategy {
 
   /// Creates the [TypesInferrer] used by this strategy.
   TypesInferrer createTypesInferrer(
-      JClosedWorld closedWorld, InferredDataBuilder inferredDataBuilder,
-      {bool disableTypeInference: false});
+      JClosedWorld closedWorld, InferredDataBuilder inferredDataBuilder);
 }

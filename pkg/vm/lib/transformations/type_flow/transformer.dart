@@ -7,6 +7,7 @@ library vm.transformations.type_flow.transformer;
 
 import 'dart:core' hide Type;
 
+import 'package:kernel/target/targets.dart';
 import 'package:kernel/ast.dart' hide Statement, StatementVisitor;
 import 'package:kernel/core_types.dart' show CoreTypes;
 import 'package:kernel/class_hierarchy.dart' show ClassHierarchy;
@@ -14,6 +15,7 @@ import 'package:kernel/library_index.dart' show LibraryIndex;
 import 'package:kernel/type_environment.dart';
 
 import 'analysis.dart';
+import 'native_code.dart';
 import 'calls.dart';
 import 'summary_collector.dart';
 import 'types.dart';
@@ -30,12 +32,9 @@ const bool kDumpClassHierarchy =
 
 /// Whole-program type flow analysis and transformation.
 /// Assumes strong mode and closed world.
-Component transformComponent(
-    CoreTypes coreTypes, Component component, List<String> entryPoints) {
-  if ((entryPoints == null) || entryPoints.isEmpty) {
-    throw 'Error: unable to perform global type flow analysis without entry points.';
-  }
-
+Component transformComponent(Target target, CoreTypes coreTypes,
+    Component component, List<String> entryPoints,
+    [PragmaAnnotationParser matcher]) {
   void ignoreAmbiguousSupertypes(Class cls, Supertype a, Supertype b) {}
   final hierarchy = new ClassHierarchy(component,
       onAmbiguousSupertypes: ignoreAmbiguousSupertypes);
@@ -44,7 +43,7 @@ Component transformComponent(
 
   if (kDumpAllSummaries) {
     Statistics.reset();
-    new CreateAllSummariesVisitor(types).visitComponent(component);
+    new CreateAllSummariesVisitor(target, types).visitComponent(component);
     Statistics.print("All summaries statistics");
   }
 
@@ -52,8 +51,8 @@ Component transformComponent(
   final analysisStopWatch = new Stopwatch()..start();
 
   final typeFlowAnalysis = new TypeFlowAnalysis(
-      component, coreTypes, hierarchy, types, libraryIndex,
-      entryPointsJSONFiles: entryPoints);
+      target, component, coreTypes, hierarchy, types, libraryIndex,
+      entryPointsJSONFiles: entryPoints, matcher: matcher);
 
   Procedure main = component.mainMethod;
   final Selector mainSelector = new DirectSelector(main);
@@ -94,7 +93,7 @@ class TFADevirtualization extends Devirtualization {
             _typeFlowAnalysis.environment.hierarchy);
 
   @override
-  DirectCallMetadata getDirectCall(TreeNode node, Member target,
+  DirectCallMetadata getDirectCall(TreeNode node, Member interfaceTarget,
       {bool setter = false}) {
     final callSite = _typeFlowAnalysis.callSite(node);
     if (callSite != null) {
@@ -113,10 +112,12 @@ class AnnotateKernel extends RecursiveVisitor<Null> {
   final TypeFlowAnalysis _typeFlowAnalysis;
   final InferredTypeMetadataRepository _inferredTypeMetadata;
   final UnreachableNodeMetadataRepository _unreachableNodeMetadata;
+  final DartType _intType;
 
   AnnotateKernel(Component component, this._typeFlowAnalysis)
       : _inferredTypeMetadata = new InferredTypeMetadataRepository(),
-        _unreachableNodeMetadata = new UnreachableNodeMetadataRepository() {
+        _unreachableNodeMetadata = new UnreachableNodeMetadataRepository(),
+        _intType = _typeFlowAnalysis.environment.intType {
     component.addMetadataRepository(_inferredTypeMetadata);
     component.addMetadataRepository(_unreachableNodeMetadata);
   }
@@ -125,23 +126,25 @@ class AnnotateKernel extends RecursiveVisitor<Null> {
     assertx(type != null);
 
     Class concreteClass;
+    bool isInt = false;
 
     final nullable = type is NullableType;
     if (nullable) {
-      final baseType = (type as NullableType).baseType;
-
-      if (baseType == const EmptyType()) {
-        concreteClass = _typeFlowAnalysis.environment.coreTypes.nullClass;
-      } else {
-        concreteClass =
-            baseType.getConcreteClass(_typeFlowAnalysis.hierarchyCache);
-      }
-    } else {
-      concreteClass = type.getConcreteClass(_typeFlowAnalysis.hierarchyCache);
+      type = (type as NullableType).baseType;
     }
 
-    if ((concreteClass != null) || !nullable) {
-      return new InferredType(concreteClass, nullable);
+    if (nullable && type == const EmptyType()) {
+      concreteClass = _typeFlowAnalysis.environment.coreTypes.nullClass;
+    } else {
+      concreteClass = type.getConcreteClass(_typeFlowAnalysis.hierarchyCache);
+
+      if (concreteClass == null) {
+        isInt = type.isSubtypeOf(_typeFlowAnalysis.hierarchyCache, _intType);
+      }
+    }
+
+    if ((concreteClass != null) || !nullable || isInt) {
+      return new InferredType(concreteClass, nullable, isInt);
     }
 
     return null;
@@ -932,6 +935,11 @@ class _TreeShakerConstantVisitor extends ConstantVisitor<Null> {
 
   @override
   visitStringConstant(StringConstant constant) {}
+
+  @override
+  visitSymbolConstant(SymbolConstant constant) {
+    // The Symbol class and it's _name field are always retained.
+  }
 
   @override
   visitMapConstant(MapConstant node) {

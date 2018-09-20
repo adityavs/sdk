@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
-import 'package:args/src/arg_results.dart';
 import 'package:kernel/binary/ast_to_binary.dart';
 import 'package:kernel/ast.dart' show Component;
 import 'package:kernel/kernel.dart' show loadComponentFromBinary;
@@ -45,7 +44,7 @@ Future<int> main() async {
         'sdkroot',
       ];
       await starter(args, compiler: compiler);
-      final List<ArgResults> capturedArgs = verify(compiler.compile(
+      final List<dynamic> capturedArgs = verify(compiler.compile(
         argThat(equals('server.dart')),
         captureAny,
         generator: anyNamed('generator'),
@@ -62,7 +61,7 @@ Future<int> main() async {
         '--strong',
       ];
       await starter(args, compiler: compiler);
-      final List<ArgResults> capturedArgs = verify(compiler.compile(
+      final List<dynamic> capturedArgs = verify(compiler.compile(
         argThat(equals('server.dart')),
         captureAny,
         generator: anyNamed('generator'),
@@ -81,7 +80,7 @@ Future<int> main() async {
         '--no-sync-async',
       ];
       await starter(args, compiler: compiler);
-      final List<ArgResults> capturedArgs = verify(compiler.compile(
+      final List<dynamic> capturedArgs = verify(compiler.compile(
         argThat(equals('server.dart')),
         captureAny,
         generator: anyNamed('generator'),
@@ -99,7 +98,7 @@ Future<int> main() async {
         '--link-platform',
       ];
       await starter(args, compiler: compiler);
-      final List<ArgResults> capturedArgs = verify(compiler.compile(
+      final List<dynamic> capturedArgs = verify(compiler.compile(
         argThat(equals('server.dart')),
         captureAny,
         generator: anyNamed('generator'),
@@ -131,13 +130,15 @@ Future<int> main() async {
         compileCalled.sendPort.send(true);
       });
 
-      await starter(
+      Future<int> result = starter(
         args,
         compiler: compiler,
         input: inputStreamController.stream,
       );
       inputStreamController.add('compile server.dart\n'.codeUnits);
       await compileCalled.first;
+      inputStreamController.add('quit\n'.codeUnits);
+      expect(await result, 0);
       inputStreamController.close();
     });
   });
@@ -168,13 +169,15 @@ Future<int> main() async {
         compileCalled.sendPort.send(true);
       });
 
-      await starter(
+      Future<int> result = starter(
         args,
         compiler: compiler,
         input: inputStreamController.stream,
       );
       inputStreamController.add('compile server.dart\n'.codeUnits);
       await compileCalled.first;
+      inputStreamController.add('quit\n'.codeUnits);
+      expect(await result, 0);
       inputStreamController.close();
     });
 
@@ -191,18 +194,20 @@ Future<int> main() async {
         compileCalled.sendPort.send(true);
       });
 
-      await starter(
+      Future<int> result = starter(
         strongArgs,
         compiler: compiler,
         input: inputStreamController.stream,
       );
       inputStreamController.add('compile server.dart\n'.codeUnits);
       await compileCalled.first;
+      inputStreamController.add('quit\n'.codeUnits);
+      expect(await result, 0);
       inputStreamController.close();
     });
 
     test('compile few files', () async {
-      final StreamController<List<int>> streamController =
+      final StreamController<List<int>> inputStreamController =
           new StreamController<List<int>>();
       final ReceivePort compileCalled = new ReceivePort();
       int counter = 1;
@@ -216,15 +221,17 @@ Future<int> main() async {
         compileCalled.sendPort.send(true);
       });
 
-      await starter(
+      Future<int> result = starter(
         args,
         compiler: compiler,
-        input: streamController.stream,
+        input: inputStreamController.stream,
       );
-      streamController.add('compile server1.dart\n'.codeUnits);
-      streamController.add('compile server2.dart\n'.codeUnits);
+      inputStreamController.add('compile server1.dart\n'.codeUnits);
+      inputStreamController.add('compile server2.dart\n'.codeUnits);
       await compileCalled.first;
-      streamController.close();
+      inputStreamController.add('quit\n'.codeUnits);
+      expect(await result, 0);
+      inputStreamController.close();
     });
   });
 
@@ -240,7 +247,7 @@ Future<int> main() async {
     ];
 
     test('recompile few files', () async {
-      final StreamController<List<int>> streamController =
+      final StreamController<List<int>> inputStreamController =
           new StreamController<List<int>>();
       final ReceivePort recompileCalled = new ReceivePort();
 
@@ -248,12 +255,12 @@ Future<int> main() async {
           .thenAnswer((Invocation invocation) {
         recompileCalled.sendPort.send(true);
       });
-      await starter(
+      Future<int> result = starter(
         args,
         compiler: compiler,
-        input: streamController.stream,
+        input: inputStreamController.stream,
       );
-      streamController
+      inputStreamController
           .add('recompile abc\nfile1.dart\nfile2.dart\nabc\n'.codeUnits);
       await recompileCalled.first;
 
@@ -262,11 +269,13 @@ Future<int> main() async {
         compiler.invalidate(Uri.base.resolve('file2.dart')),
         await compiler.recompileDelta(filename: null),
       ]);
-      streamController.close();
+      inputStreamController.add('quit\n'.codeUnits);
+      expect(await result, 0);
+      inputStreamController.close();
     });
 
     test('recompile few files with new entrypoint', () async {
-      final StreamController<List<int>> streamController =
+      final StreamController<List<int>> inputStreamController =
           new StreamController<List<int>>();
       final ReceivePort recompileCalled = new ReceivePort();
 
@@ -274,12 +283,12 @@ Future<int> main() async {
           .thenAnswer((Invocation invocation) {
         recompileCalled.sendPort.send(true);
       });
-      await starter(
+      Future<int> result = starter(
         args,
         compiler: compiler,
-        input: streamController.stream,
+        input: inputStreamController.stream,
       );
-      streamController.add(
+      inputStreamController.add(
           'recompile file2.dart abc\nfile1.dart\nfile2.dart\nabc\n'.codeUnits);
       await recompileCalled.first;
 
@@ -288,7 +297,9 @@ Future<int> main() async {
         compiler.invalidate(Uri.base.resolve('file2.dart')),
         await compiler.recompileDelta(filename: 'file2.dart'),
       ]);
-      streamController.close();
+      inputStreamController.add('quit\n'.codeUnits);
+      expect(await result, 0);
+      inputStreamController.close();
     });
 
     test('accept', () async {
@@ -298,13 +309,15 @@ Future<int> main() async {
       when(compiler.acceptLastDelta()).thenAnswer((Invocation invocation) {
         acceptCalled.sendPort.send(true);
       });
-      await starter(
+      Future<int> result = starter(
         args,
         compiler: compiler,
         input: inputStreamController.stream,
       );
       inputStreamController.add('accept\n'.codeUnits);
       await acceptCalled.first;
+      inputStreamController.add('quit\n'.codeUnits);
+      expect(await result, 0);
       inputStreamController.close();
     });
 
@@ -316,18 +329,20 @@ Future<int> main() async {
           .thenAnswer((Invocation invocation) {
         resetCalled.sendPort.send(true);
       });
-      await starter(
+      Future<int> result = starter(
         args,
         compiler: compiler,
         input: inputStreamController.stream,
       );
       inputStreamController.add('reset\n'.codeUnits);
       await resetCalled.first;
+      inputStreamController.add('quit\n'.codeUnits);
+      expect(await result, 0);
       inputStreamController.close();
     });
 
     test('compile then recompile', () async {
-      final StreamController<List<int>> streamController =
+      final StreamController<List<int>> inputStreamController =
           new StreamController<List<int>>();
       final ReceivePort recompileCalled = new ReceivePort();
 
@@ -335,14 +350,14 @@ Future<int> main() async {
           .thenAnswer((Invocation invocation) {
         recompileCalled.sendPort.send(true);
       });
-      await starter(
+      Future<int> result = starter(
         args,
         compiler: compiler,
-        input: streamController.stream,
+        input: inputStreamController.stream,
       );
-      streamController.add('compile file1.dart\n'.codeUnits);
-      streamController.add('accept\n'.codeUnits);
-      streamController
+      inputStreamController.add('compile file1.dart\n'.codeUnits);
+      inputStreamController.add('accept\n'.codeUnits);
+      inputStreamController
           .add('recompile def\nfile2.dart\nfile3.dart\ndef\n'.codeUnits);
       await recompileCalled.first;
 
@@ -354,7 +369,9 @@ Future<int> main() async {
         compiler.invalidate(Uri.base.resolve('file3.dart')),
         await compiler.recompileDelta(filename: null),
       ]);
-      streamController.close();
+      inputStreamController.add('quit\n'.codeUnits);
+      expect(await result, 0);
+      inputStreamController.close();
     });
   });
 
@@ -366,7 +383,7 @@ Future<int> main() async {
     ];
 
     test('compile then accept', () async {
-      final StreamController<List<int>> streamController =
+      final StreamController<List<int>> inputStreamController =
           new StreamController<List<int>>();
       final StreamController<List<int>> stdoutStreamController =
           new StreamController<List<int>>();
@@ -396,27 +413,31 @@ Future<int> main() async {
       when(generator.initialized).thenAnswer((_) => false);
       when(generator.compile())
           .thenAnswer((_) => new Future<Component>.value(new Component()));
+      when(generator.compile(entryPoint: anyNamed("entryPoint")))
+          .thenAnswer((_) => new Future<Component>.value(new Component()));
       final _MockedBinaryPrinterFactory printerFactory =
           new _MockedBinaryPrinterFactory();
       when(printerFactory.newBinaryPrinter(any))
           .thenReturn(new _MockedBinaryPrinter());
-      await starter(
+      Future<int> result = starter(
         args,
         compiler: null,
-        input: streamController.stream,
+        input: inputStreamController.stream,
         output: ioSink,
         generator: generator,
         binaryPrinterFactory: printerFactory,
       );
 
-      streamController.add('compile file1.dart\n'.codeUnits);
+      inputStreamController.add('compile file1.dart\n'.codeUnits);
       await receivedResult.first;
-      streamController.add('accept\n'.codeUnits);
+      inputStreamController.add('accept\n'.codeUnits);
       receivedResult = new ReceivePort();
-      streamController.add('recompile def\nfile1.dart\ndef\n'.codeUnits);
+      inputStreamController.add('recompile def\nfile1.dart\ndef\n'.codeUnits);
       await receivedResult.first;
 
-      streamController.close();
+      inputStreamController.add('quit\n'.codeUnits);
+      expect(await result, 0);
+      inputStreamController.close();
     });
 
     group('compile with output path', () {
@@ -434,8 +455,8 @@ Future<int> main() async {
           '--output-incremental-dill',
           '/foo/bar/server.incremental.dart.dill',
         ];
-        await starter(args, compiler: compiler);
-        final List<ArgResults> capturedArgs = verify(compiler.compile(
+        expect(await starter(args, compiler: compiler), 0);
+        final List<dynamic> capturedArgs = verify(compiler.compile(
           argThat(equals('server.dart')),
           captureAny,
           generator: anyNamed('generator'),
@@ -501,10 +522,10 @@ Future<int> main() async {
         }
       });
 
-      await starter(args, input: streamController.stream, output: ioSink);
+      Future<int> result =
+          starter(args, input: streamController.stream, output: ioSink);
       streamController.add('compile ${file.path}\n'.codeUnits);
       int count = 0;
-      Completer<bool> allDone = new Completer<bool>();
       receivedResults.stream.listen((String outputFilenameAndErrorCount) {
         if (count == 0) {
           // First request is to 'compile', which results in full kernel file.
@@ -560,12 +581,144 @@ Future<int> main() async {
           CompilationResult result =
               new CompilationResult.parse(outputFilenameAndErrorCount);
           expect(result.errorsCount, greaterThan(0));
-          allDone.complete(true);
+
+          streamController.add('quit\n'.codeUnits);
         }
       });
 
-      expect(await allDone.future, true);
+      expect(await result, 0);
     });
+
+    test('compile expression when delta is rejected', () async {
+      var fileLib = new File('${tempDir.path}/lib.dart')..createSync();
+      fileLib.writeAsStringSync("foo() => 42;\n");
+      var file = new File('${tempDir.path}/foo.dart')..createSync();
+      file.writeAsStringSync("import 'lib.dart'; main1() => print(foo);\n");
+      var dillFile = new File('${tempDir.path}/app.dill');
+      expect(dillFile.existsSync(), equals(false));
+      final List<String> args = <String>[
+        '--sdk-root=${sdkRoot.toFilePath()}',
+        '--strong',
+        '--incremental',
+        '--platform=${platformKernel.path}',
+        '--output-dill=${dillFile.path}'
+      ];
+
+      final StreamController<List<int>> inputStreamController =
+          new StreamController<List<int>>();
+      final StreamController<List<int>> stdoutStreamController =
+          new StreamController<List<int>>();
+      final IOSink ioSink = new IOSink(stdoutStreamController.sink);
+      StreamController<String> receivedResults = new StreamController<String>();
+
+      String boundaryKey;
+      stdoutStreamController.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((String s) {
+        print(s);
+        const String RESULT_OUTPUT_SPACE = 'result ';
+        if (boundaryKey == null) {
+          if (s.startsWith(RESULT_OUTPUT_SPACE)) {
+            boundaryKey = s.substring(RESULT_OUTPUT_SPACE.length);
+          }
+        } else {
+          if (s.startsWith(boundaryKey)) {
+            receivedResults.add(s.length > boundaryKey.length
+                ? s.substring(boundaryKey.length + 1)
+                : null);
+            boundaryKey = null;
+          }
+        }
+      });
+
+      final Future<int> result =
+          starter(args, input: inputStreamController.stream, output: ioSink);
+      inputStreamController.add('compile ${file.path}\n'.codeUnits);
+      int count = 0;
+      receivedResults.stream.listen((String outputFilenameAndErrorCount) {
+        if (count == 0) {
+          // First request was to 'compile', which resulted in full kernel file.
+          CompilationResult result =
+              new CompilationResult.parse(outputFilenameAndErrorCount);
+
+          expect(dillFile.existsSync(), equals(true));
+          expect(result.filename, dillFile.path);
+          expect(result.errorsCount, equals(0));
+          inputStreamController.add('accept\n'.codeUnits);
+
+          // 'compile-expression <boundarykey>
+          // expression
+          // definitions (one per line)
+          // ...
+          // <boundarykey>
+          // type-defintions (one per line)
+          // ...
+          // <boundarykey>
+          // <libraryUri: String>
+          // <klass: String>
+          // <isStatic: true|false>
+          inputStreamController.add('''
+compile-expression abc
+main1
+abc
+abc
+${file.uri}
+
+true
+'''
+              .codeUnits);
+          count += 1;
+        } else if (count == 1) {
+          // Second request was to 'compile-expression', which resulted in
+          // kernel file with a function that wraps compiled expression.
+          expect(outputFilenameAndErrorCount, isNotNull);
+          CompilationResult result =
+              new CompilationResult.parse(outputFilenameAndErrorCount);
+          print(outputFilenameAndErrorCount);
+
+          expect(result.errorsCount, equals(0));
+          File outputFile = new File(result.filename);
+          expect(outputFile.existsSync(), equals(true));
+          expect(outputFile.lengthSync(), isPositive);
+
+          file.writeAsStringSync("import 'lib.dart'; main() => foo();\n");
+          inputStreamController.add('recompile ${file.path} abc\n'
+              '${file.path}\n'
+              'abc\n'
+              .codeUnits);
+
+          count += 1;
+        } else if (count == 2) {
+          // Third request was to recompile the script after renaming a function.
+          expect(outputFilenameAndErrorCount, isNotNull);
+          CompilationResult result =
+              new CompilationResult.parse(outputFilenameAndErrorCount);
+          expect(result.errorsCount, equals(0));
+
+          inputStreamController.add('reject\n'.codeUnits);
+          count += 1;
+        } else if (count == 3) {
+          // Fourth request was to reject the compilation results.
+          inputStreamController.add(
+              'compile-expression abc\nmain1\nabc\nabc\n${file.uri}\n\ntrue\n'
+                  .codeUnits);
+          count += 1;
+        } else {
+          expect(count, 4);
+          // Fifth request was to 'compile-expression' that references original
+          // function, which should still be successful.
+          expect(outputFilenameAndErrorCount, isNotNull);
+          CompilationResult result =
+              new CompilationResult.parse(outputFilenameAndErrorCount);
+          expect(result.errorsCount, equals(0));
+          inputStreamController.add('quit\n'.codeUnits);
+        }
+      });
+
+      expect(await result, 0);
+      inputStreamController.close();
+    }, timeout: Timeout.factor(100));
 
     test('recompile request keeps incremental output dill filename', () async {
       var file = new File('${tempDir.path}/foo.dart')..createSync();
@@ -580,7 +733,7 @@ Future<int> main() async {
         '--output-dill=${dillFile.path}'
       ];
 
-      final StreamController<List<int>> streamController =
+      final StreamController<List<int>> inputStreamController =
           new StreamController<List<int>>();
       final StreamController<List<int>> stdoutStreamController =
           new StreamController<List<int>>();
@@ -604,10 +757,10 @@ Future<int> main() async {
           }
         }
       });
-      await starter(args, input: streamController.stream, output: ioSink);
-      streamController.add('compile ${file.path}\n'.codeUnits);
+      Future<int> result =
+          starter(args, input: inputStreamController.stream, output: ioSink);
+      inputStreamController.add('compile ${file.path}\n'.codeUnits);
       int count = 0;
-      Completer<bool> allDone = new Completer<bool>();
       receivedResults.stream.listen((String outputFilenameAndErrorCount) {
         CompilationResult result =
             new CompilationResult.parse(outputFilenameAndErrorCount);
@@ -617,10 +770,10 @@ Future<int> main() async {
           expect(result.filename, dillFile.path);
           expect(result.errorsCount, 0);
           count += 1;
-          streamController.add('accept\n'.codeUnits);
+          inputStreamController.add('accept\n'.codeUnits);
           var file2 = new File('${tempDir.path}/bar.dart')..createSync();
           file2.writeAsStringSync("main() {}\n");
-          streamController.add('recompile ${file2.path} abc\n'
+          inputStreamController.add('recompile ${file2.path} abc\n'
               '${file2.path}\n'
               'abc\n'
               .codeUnits);
@@ -632,10 +785,11 @@ Future<int> main() async {
           expect(result.filename, dillIncFile.path);
           expect(result.errorsCount, 0);
           expect(dillIncFile.existsSync(), equals(true));
-          allDone.complete(true);
+          inputStreamController.add('quit\n'.codeUnits);
         }
       });
-      expect(await allDone.future, true);
+      expect(await result, 0);
+      inputStreamController.close();
     });
 
     test('compile and recompile report non-zero error count', () async {
@@ -651,7 +805,7 @@ Future<int> main() async {
         '--output-dill=${dillFile.path}'
       ];
 
-      final StreamController<List<int>> streamController =
+      final StreamController<List<int>> inputStreamController =
           new StreamController<List<int>>();
       final StreamController<List<int>> stdoutStreamController =
           new StreamController<List<int>>();
@@ -675,10 +829,10 @@ Future<int> main() async {
           }
         }
       });
-      await starter(args, input: streamController.stream, output: ioSink);
-      streamController.add('compile ${file.path}\n'.codeUnits);
+      Future<int> result =
+          starter(args, input: inputStreamController.stream, output: ioSink);
+      inputStreamController.add('compile ${file.path}\n'.codeUnits);
       int count = 0;
-      Completer<bool> allDone = new Completer<bool>();
       receivedResults.stream.listen((String outputFilenameAndErrorCount) {
         CompilationResult result =
             new CompilationResult.parse(outputFilenameAndErrorCount);
@@ -688,10 +842,10 @@ Future<int> main() async {
             expect(result.filename, dillFile.path);
             expect(result.errorsCount, 2);
             count += 1;
-            streamController.add('accept\n'.codeUnits);
+            inputStreamController.add('accept\n'.codeUnits);
             var file2 = new File('${tempDir.path}/bar.dart')..createSync();
             file2.writeAsStringSync("main() { baz(); }\n");
-            streamController.add('recompile ${file2.path} abc\n'
+            inputStreamController.add('recompile ${file2.path} abc\n'
                 '${file2.path}\n'
                 'abc\n'
                 .codeUnits);
@@ -701,10 +855,10 @@ Future<int> main() async {
             expect(result.filename, dillIncFile.path);
             expect(result.errorsCount, 1);
             count += 1;
-            streamController.add('accept\n'.codeUnits);
+            inputStreamController.add('accept\n'.codeUnits);
             var file2 = new File('${tempDir.path}/bar.dart')..createSync();
             file2.writeAsStringSync("main() { }\n");
-            streamController.add('recompile ${file2.path} abc\n'
+            inputStreamController.add('recompile ${file2.path} abc\n'
                 '${file2.path}\n'
                 'abc\n'
                 .codeUnits);
@@ -714,10 +868,11 @@ Future<int> main() async {
             expect(result.filename, dillIncFile.path);
             expect(result.errorsCount, 0);
             expect(dillIncFile.existsSync(), equals(true));
-            allDone.complete(true);
+            inputStreamController.add('quit\n'.codeUnits);
         }
       });
-      expect(await allDone.future, true);
+      expect(await result, 0);
+      inputStreamController.close();
     });
 
     test('compile and recompile with MultiRootFileSystem', () async {
@@ -739,7 +894,7 @@ Future<int> main() async {
         '--filesystem-scheme=test-scheme',
         'test-scheme:///foo.dart'
       ];
-      await starter(args);
+      expect(await starter(args), 0);
     });
 
     test('compile and produce deps file', () async {
@@ -752,18 +907,32 @@ Future<int> main() async {
       final List<String> args = <String>[
         '--sdk-root=${sdkRoot.toFilePath()}',
         '--strong',
+        '--incremental',
         '--platform=${platformKernel.path}',
         '--output-dill=${dillFile.path}',
         '--depfile=${depFile.path}',
         file.path
       ];
-      await starter(args);
+      expect(await starter(args), 0);
       expect(depFile.existsSync(), true);
       var depContents = depFile.readAsStringSync();
       var depContentsParsed = depContents.split(': ');
       expect(path.basename(depContentsParsed[0]), path.basename(dillFile.path));
       expect(depContentsParsed[1], isNotEmpty);
     });
+
+    void checkIsEqual(List<int> a, List<int> b) {
+      int length = a.length;
+      if (b.length < length) {
+        length = b.length;
+      }
+      for (int i = 0; i < length; ++i) {
+        if (a[i] != b[i]) {
+          fail("Data differs at byte ${i + 1}.");
+        }
+      }
+      expect(a.length, equals(b.length));
+    }
 
     test('mimic flutter benchmark', () async {
       // This is based on what flutters "hot_mode_dev_cycle__benchmark" does.
@@ -788,9 +957,10 @@ Future<int> main() async {
       int libraryCount = -1;
       int sourceCount = -1;
 
+      List<List<int>> compiledKernels = <List<int>>[];
       for (int serverCloses = 0; serverCloses < 2; ++serverCloses) {
         print("Restart #$serverCloses");
-        final StreamController<List<int>> streamController =
+        final StreamController<List<int>> inputStreamController =
             new StreamController<List<int>>();
         final StreamController<List<int>> stdoutStreamController =
             new StreamController<List<int>>();
@@ -816,16 +986,26 @@ Future<int> main() async {
           }
         });
 
-        await starter(args, input: streamController.stream, output: ioSink);
-        streamController.add('compile ${dart2js.path}\n'.codeUnits);
+        Future<int> result =
+            starter(args, input: inputStreamController.stream, output: ioSink);
+        inputStreamController.add('compile ${dart2js.path}\n'.codeUnits);
         int count = 0;
-        Completer<bool> allDone = new Completer<bool>();
         receivedResults.stream.listen((String outputFilenameAndErrorCount) {
           int delim = outputFilenameAndErrorCount.lastIndexOf(' ');
           expect(delim > 0, equals(true));
           String outputFilename =
               outputFilenameAndErrorCount.substring(0, delim);
           print("$outputFilename -- count $count");
+
+          // Ensure that kernel file produced when compiler was initialized
+          // from compiled kernel files matches kernel file produced when
+          // compiler was initialized from sources on the first run.
+          if (serverCloses == 0) {
+            compiledKernels.add(new File(dillFile.path).readAsBytesSync());
+          } else {
+            checkIsEqual(compiledKernels[count],
+                new File(dillFile.path).readAsBytesSync());
+          }
           if (count == 0) {
             // First request is to 'compile', which results in full kernel file.
             expect(dillFile.existsSync(), equals(true));
@@ -849,16 +1029,17 @@ Future<int> main() async {
             }
 
             // Include platform and verify.
-            component = loadComponentFromBinary(platformKernel.path, component);
+            component =
+                loadComponentFromBinary(platformKernel.toFilePath(), component);
             expect(component.mainMethod, isNotNull);
             verifyComponent(component);
 
             count += 1;
 
             // Restart with no changes
-            streamController.add('accept\n'.codeUnits);
-            streamController.add('reset\n'.codeUnits);
-            streamController.add('recompile ${dart2js.path} x$count\n'
+            inputStreamController.add('accept\n'.codeUnits);
+            inputStreamController.add('reset\n'.codeUnits);
+            inputStreamController.add('recompile ${dart2js.path} x$count\n'
                 'x$count\n'
                 .codeUnits);
           } else if (count == 1) {
@@ -874,15 +1055,16 @@ Future<int> main() async {
                 reason: "Expect the same number of sources after a reset.");
 
             // Include platform and verify.
-            component = loadComponentFromBinary(platformKernel.path, component);
+            component =
+                loadComponentFromBinary(platformKernel.toFilePath(), component);
             expect(component.mainMethod, isNotNull);
             verifyComponent(component);
 
             count += 1;
 
             // Reload with no changes
-            streamController.add('accept\n'.codeUnits);
-            streamController.add('recompile ${dart2js.path} x$count\n'
+            inputStreamController.add('accept\n'.codeUnits);
+            inputStreamController.add('recompile ${dart2js.path} x$count\n'
                 'x$count\n'
                 .codeUnits);
           } else if (count == 2) {
@@ -898,9 +1080,9 @@ Future<int> main() async {
             count += 1;
 
             // Reload with 1 change
-            streamController.add('accept\n'.codeUnits);
-            streamController.add('recompile ${dart2js.path} x$count\n'
-                '${dart2jsOtherFile.path}\n'
+            inputStreamController.add('accept\n'.codeUnits);
+            inputStreamController.add('recompile ${dart2js.path} x$count\n'
+                '${dart2jsOtherFile.uri}\n'
                 'x$count\n'
                 .codeUnits);
           } else if (count == 3) {
@@ -918,10 +1100,11 @@ Future<int> main() async {
 
             count += 1;
 
-            allDone.complete(true);
+            inputStreamController.add('quit\n'.codeUnits);
           }
         });
-        expect(await allDone.future, true);
+        expect(await result, 0);
+        inputStreamController.close();
       }
     }, timeout: new Timeout.factor(8));
   });

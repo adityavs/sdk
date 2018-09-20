@@ -61,14 +61,16 @@ class ChangeBuilderImpl implements ChangeBuilder {
   }
 
   @override
-  Future<Null> addFileEdit(
+  Future<void> addFileEdit(
       String path, void buildFileEdit(FileEditBuilder builder)) async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     FileEditBuilderImpl builder = await createFileEditBuilder(path);
     buildFileEdit(builder);
-    _change.addFileEdit(builder.fileEdit);
-    await builder.finalize();
+    if (builder.hasEdits) {
+      _change.addFileEdit(builder.fileEdit);
+      await builder.finalize();
+    }
   }
 
   /**
@@ -275,6 +277,11 @@ class FileEditBuilderImpl implements FileEditBuilder {
   FileEditBuilderImpl(this.changeBuilder, String path, int timeStamp)
       : fileEdit = new SourceFileEdit(path, timeStamp);
 
+  /**
+   * Return `true` if this builder has edits to be applied.
+   */
+  bool get hasEdits => fileEdit.edits.isNotEmpty;
+
   @override
   void addDeletion(SourceRange range) {
     EditBuilderImpl builder = createEditBuilder(range.offset, range.length);
@@ -336,7 +343,7 @@ class FileEditBuilderImpl implements FileEditBuilder {
   /**
    * Finalize the source file edit that is being built.
    */
-  Future<Null> finalize() async {
+  Future<void> finalize() async {
     // TODO(brianwilkerson) Determine whether this await is necessary.
     await null;
     // Nothing to do.

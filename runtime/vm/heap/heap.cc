@@ -95,8 +95,9 @@ uword Heap::AllocateOld(intptr_t size, HeapPage::PageType type) {
     if (addr != 0) {
       return addr;
     }
-    // All GC tasks finished without allocating successfully. Run a full GC.
-    CollectAllGarbage();
+    // All GC tasks finished without allocating successfully. Collect both
+    // generations.
+    CollectMostGarbage();
     addr = old_space_.TryAllocate(size, type);
     if (addr != 0) {
       return addr;
@@ -135,16 +136,17 @@ void Heap::AllocateExternal(intptr_t cid, intptr_t size, Space space) {
       // Attempt to free some external allocation by a scavenge. (If the total
       // remains above the limit, next external alloc will trigger another.)
       CollectGarbage(kScavenge, kExternal);
+      // Promotion may have pushed old space over its limit.
+      if (old_space_.NeedsGarbageCollection()) {
+        CollectGarbage(kMarkSweep, kExternal);
+      }
     }
   } else {
     ASSERT(space == kOld);
     old_space_.AllocateExternal(cid, size);
-  }
-  // Idle GC does not check whether promotions should trigger a full GC.
-  // As a workaround, we check here on every external allocation. See issue
-  // dartbug.com/33314.
-  if (old_space_.NeedsGarbageCollection()) {
-    CollectAllGarbage(kExternal);
+    if (old_space_.NeedsGarbageCollection()) {
+      CollectMostGarbage(kExternal);
+    }
   }
 }
 
@@ -429,7 +431,7 @@ void Heap::CollectOldSpaceGarbage(Thread* thread,
     NOT_IN_PRODUCT(PrintStatsToTimeline(&tds, reason));
     // Some Code objects may have been collected so invalidate handler cache.
     thread->isolate()->handler_info_cache()->Clear();
-    thread->isolate()->catch_entry_state_cache()->Clear();
+    thread->isolate()->catch_entry_moves_cache()->Clear();
     EndOldSpaceGC();
   }
 }
@@ -457,6 +459,12 @@ void Heap::CollectGarbage(Space space) {
     ASSERT(space == kNew);
     CollectNewSpaceGarbage(thread, kNewSpace);
   }
+}
+
+void Heap::CollectMostGarbage(GCReason reason) {
+  Thread* thread = Thread::Current();
+  CollectNewSpaceGarbage(thread, reason);
+  CollectOldSpaceGarbage(thread, kMarkSweep, reason);
 }
 
 void Heap::CollectAllGarbage(GCReason reason) {

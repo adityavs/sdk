@@ -5,7 +5,7 @@
 library js_backend.backend.resolution_listener;
 
 import '../common/names.dart' show Identifiers;
-import '../common_elements.dart' show CommonElements, ElementEnvironment;
+import '../common_elements.dart' show KCommonElements, KElementEnvironment;
 import '../constants/values.dart';
 import '../deferred_load.dart';
 import '../elements/entities.dart';
@@ -32,8 +32,8 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
   final DeferredLoadTask _deferredLoadTask;
 
   final CompilerOptions _options;
-  final ElementEnvironment _elementEnvironment;
-  final CommonElements _commonElements;
+  final KElementEnvironment _elementEnvironment;
+  final KCommonElements _commonElements;
   final BackendImpacts _impacts;
 
   final NativeBasicData _nativeData;
@@ -134,8 +134,8 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
   }
 
   @override
-  void onQueueOpen(Enqueuer enqueuer, FunctionEntity mainMethod,
-      Iterable<LibraryEntity> libraries) {
+  void onQueueOpen(
+      Enqueuer enqueuer, FunctionEntity mainMethod, Iterable<Uri> libraries) {
     if (_deferredLoadTask.isProgramSplit) {
       enqueuer.applyImpact(_computeDeferredLoadingImpact(),
           impactSource: 'deferred load');
@@ -422,9 +422,6 @@ class ResolutionEnqueuerListener extends EnqueuerListener {
     // will instantiate those two classes.
     _addInterceptors(_commonElements.jsBoolClass, impactBuilder);
     _addInterceptors(_commonElements.jsNullClass, impactBuilder);
-    if (_options.enableTypeAssertions) {
-      _registerBackendImpact(impactBuilder, _impacts.enableTypeAssertions);
-    }
     if (_options.disableRtiOptimization) {
       // When RTI optimization is disabled we always need all RTI helpers, so
       // register these here.

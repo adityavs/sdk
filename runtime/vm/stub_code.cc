@@ -20,6 +20,8 @@ namespace dart {
 
 DEFINE_FLAG(bool, disassemble_stubs, false, "Disassemble generated stubs.");
 
+DECLARE_FLAG(bool, enable_interpreter);
+
 StubEntry* StubCode::entries_[kNumStubEntries] = {
 #define STUB_CODE_DECLARE(name) NULL,
     VM_STUB_CODE_LIST(STUB_CODE_DECLARE)
@@ -28,10 +30,10 @@ StubEntry* StubCode::entries_[kNumStubEntries] = {
 
 StubEntry::StubEntry(const Code& code)
     : code_(code.raw()),
-      entry_point_(code.UncheckedEntryPoint()),
-      checked_entry_point_(code.CheckedEntryPoint()),
+      entry_point_(code.EntryPoint()),
+      monomorphic_entry_point_(code.MonomorphicEntryPoint()),
       size_(code.Size()),
-      label_(code.UncheckedEntryPoint()) {}
+      label_(code.EntryPoint()) {}
 
 // Visit all object pointers.
 void StubEntry::VisitObjectPointers(ObjectPointerVisitor* visitor) {
@@ -60,10 +62,11 @@ void StubCode::InitOnce() {
 
 RawCode* StubCode::Generate(const char* name,
                             void (*GenerateStub)(Assembler* assembler)) {
-  Assembler assembler;
+  ObjectPoolWrapper object_pool_wrapper;
+  Assembler assembler(&object_pool_wrapper);
   GenerateStub(&assembler);
-  const Code& code =
-      Code::Handle(Code::FinalizeCode(name, &assembler, false /* optimized */));
+  const Code& code = Code::Handle(
+      Code::FinalizeCode(name, nullptr, &assembler, false /* optimized */));
 #ifndef PRODUCT
   if (FLAG_support_disassembler && FLAG_disassemble_stubs) {
     LogBlock lb;
@@ -89,25 +92,30 @@ bool StubCode::HasBeenInitialized() {
 bool StubCode::InInvocationStub(uword pc, bool is_interpreted_frame) {
 #if !defined(TARGET_ARCH_DBC)
   ASSERT(HasBeenInitialized());
-#if defined(DART_USE_INTERPRETER)
-  if (is_interpreted_frame) {
-    // Recognize special marker set up by interpreter in entry frame.
-    return (pc & 2) != 0;
-  }
-  {
-    uword entry = StubCode::InvokeDartCodeFromBytecode_entry()->EntryPoint();
-    uword size = StubCode::InvokeDartCodeFromBytecodeSize();
-    if ((pc >= entry) && (pc < (entry + size))) {
-      return true;
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  if (FLAG_enable_interpreter) {
+    if (is_interpreted_frame) {
+      // Recognize special marker set up by interpreter in entry frame.
+      return (pc & 2) != 0;
+    }
+    {
+      uword entry = StubCode::InvokeDartCodeFromBytecode_entry()->EntryPoint();
+      uword size = StubCode::InvokeDartCodeFromBytecodeSize();
+      if ((pc >= entry) && (pc < (entry + size))) {
+        return true;
+      }
     }
   }
-#endif
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
   uword entry = StubCode::InvokeDartCode_entry()->EntryPoint();
   uword size = StubCode::InvokeDartCodeSize();
   return (pc >= entry) && (pc < (entry + size));
-#elif defined(DART_USE_INTERPRETER)
-#error "Simultaneous usage of DBC simulator and interpreter not yet supported."
 #else
+  if (FLAG_enable_interpreter) {
+    FATAL(
+        "Simultaneous usage of DBC simulator "
+        "and interpreter not yet supported.");
+  }
   // On DBC we use a special marker PC to signify entry frame because there is
   // no such thing as invocation stub.
   return (pc & 2) != 0;
@@ -139,12 +147,14 @@ RawCode* StubCode::GetAllocationStubForClass(const Class& cls) {
   Code& stub = Code::Handle(zone, cls.allocation_stub());
 #if !defined(DART_PRECOMPILED_RUNTIME)
   if (stub.IsNull()) {
-    Assembler assembler;
+    ObjectPoolWrapper object_pool_wrapper;
+    Assembler assembler(&object_pool_wrapper);
     const char* name = cls.ToCString();
     StubCode::GenerateAllocationStubForClass(&assembler, cls);
 
     if (thread->IsMutatorThread()) {
-      stub ^= Code::FinalizeCode(name, &assembler, false /* optimized */);
+      stub ^=
+          Code::FinalizeCode(name, nullptr, &assembler, false /* optimized */);
       // Check if background compilation thread has not already added the stub.
       if (cls.allocation_stub() == Code::null()) {
         stub.set_owner(cls);
@@ -168,13 +178,14 @@ RawCode* StubCode::GetAllocationStubForClass(const Class& cls) {
         // Do not Garbage collect during this stage and instead allow the
         // heap to grow.
         NoHeapGrowthControlScope no_growth_control;
-        stub ^= Code::FinalizeCode(name, &assembler, false /* optimized */);
+        stub ^= Code::FinalizeCode(name, nullptr, &assembler,
+                                   false /* optimized */);
         stub.set_owner(cls);
         cls.set_allocation_stub(stub);
       }
       Isolate* isolate = thread->isolate();
       if (isolate->heap()->NeedsGarbageCollection()) {
-        isolate->heap()->CollectAllGarbage();
+        isolate->heap()->CollectMostGarbage();
       }
     }
 #ifndef PRODUCT

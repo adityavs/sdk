@@ -2,8 +2,6 @@
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-// TODO(johnniwinther): Port this test to be frontend agnostic.
-
 library type_substitution_test;
 
 import 'package:expect/expect.dart';
@@ -11,7 +9,7 @@ import 'package:async_helper/async_helper.dart';
 import 'package:compiler/src/common_elements.dart';
 import 'package:compiler/src/elements/entities.dart';
 import 'package:compiler/src/elements/types.dart';
-import '../type_test_helper.dart';
+import '../helpers/type_test_helper.dart';
 
 DartType getType(ElementEnvironment elementEnvironment, String name) {
   ClassEntity cls =
@@ -50,7 +48,7 @@ testAsInstanceOf() async {
       class D<T> extends A<int> {}
       class E<T> extends A<A<T>> {}
       class F<T, U> extends B<F<T, String>> implements A<F<B<U>, int>> {}
-      ''', mainSource: '''
+
       main() {
         new A();
         new B();
@@ -118,6 +116,8 @@ void testSubstitution(
 testTypeSubstitution() async {
   var env = await TypeEnvironment.create(r"""
       class Class<T,S> {}
+
+      main() => new Class();
       """);
   InterfaceType Class_T_S = env["Class"];
   Expect.isNotNull(Class_T_S);

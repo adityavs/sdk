@@ -3,7 +3,7 @@
 // BSD-style license that can be found in the LICENSE file.
 
 import '../common.dart';
-import '../common_elements.dart' show CommonElements, ElementEnvironment;
+import '../common_elements.dart' show CommonElements, KElementEnvironment;
 import '../constants/values.dart';
 import '../elements/entities.dart';
 import '../js_backend/native_data.dart';
@@ -18,7 +18,7 @@ abstract class NativeMemberResolver {
 abstract class NativeMemberResolverBase implements NativeMemberResolver {
   static final RegExp _identifier = new RegExp(r'^[a-zA-Z_$][a-zA-Z0-9_$]*$');
 
-  ElementEnvironment get elementEnvironment;
+  KElementEnvironment get elementEnvironment;
   CommonElements get commonElements;
   NativeBasicData get nativeBasicData;
   NativeDataBuilder get nativeDataBuilder;
@@ -146,21 +146,21 @@ abstract class NativeMemberResolverBase implements NativeMemberResolver {
 /// Determines all native classes in a set of libraries.
 abstract class NativeClassFinder {
   /// Returns the set of all native classes declared in [libraries].
-  Iterable<ClassEntity> computeNativeClasses(Iterable<LibraryEntity> libraries);
+  Iterable<ClassEntity> computeNativeClasses(Iterable<Uri> libraries);
 }
 
 class BaseNativeClassFinder implements NativeClassFinder {
-  final ElementEnvironment _elementEnvironment;
+  final KElementEnvironment _elementEnvironment;
   final NativeBasicData _nativeBasicData;
 
   Map<String, ClassEntity> _tagOwner = new Map<String, ClassEntity>();
 
   BaseNativeClassFinder(this._elementEnvironment, this._nativeBasicData);
 
-  Iterable<ClassEntity> computeNativeClasses(
-      Iterable<LibraryEntity> libraries) {
+  Iterable<ClassEntity> computeNativeClasses(Iterable<Uri> libraries) {
     Set<ClassEntity> nativeClasses = new Set<ClassEntity>();
-    libraries.forEach((l) => _processNativeClassesInLibrary(l, nativeClasses));
+    libraries.forEach((uri) => _processNativeClassesInLibrary(
+        _elementEnvironment.lookupLibrary(uri), nativeClasses));
     _processSubclassesOfNativeClasses(libraries, nativeClasses);
     return nativeClasses;
   }
@@ -207,7 +207,7 @@ class BaseNativeClassFinder implements NativeClassFinder {
   /// Adds all subclasses of [nativeClasses] found in [libraries] to
   /// [nativeClasses].
   void _processSubclassesOfNativeClasses(
-      Iterable<LibraryEntity> libraries, Set<ClassEntity> nativeClasses) {
+      Iterable<Uri> libraries, Set<ClassEntity> nativeClasses) {
     Set<ClassEntity> nativeClassesAndSubclasses = new Set<ClassEntity>();
     // Collect potential subclasses, e.g.
     //
@@ -218,7 +218,8 @@ class BaseNativeClassFinder implements NativeClassFinder {
     Map<String, Set<ClassEntity>> potentialExtends =
         <String, Set<ClassEntity>>{};
 
-    libraries.forEach((LibraryEntity library) {
+    libraries.forEach((Uri uri) {
+      LibraryEntity library = _elementEnvironment.lookupLibrary(uri);
       _elementEnvironment.forEachClass(library, (ClassEntity cls) {
         String extendsName = _findExtendsNameOfClass(cls);
         if (extendsName != null) {

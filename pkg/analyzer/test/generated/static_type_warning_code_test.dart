@@ -436,7 +436,6 @@ int f() async* {}
   }
 
   test_illegalAsyncGeneratorReturnType_function_subtypeOfStream() async {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
     await assertErrorsInCode('''
 import 'dart:async';
 abstract class SubStream<T> implements Stream<T> {}
@@ -453,7 +452,6 @@ class C {
   }
 
   test_illegalAsyncGeneratorReturnType_method_subtypeOfStream() async {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
     await assertErrorsInCode('''
 import 'dart:async';
 abstract class SubStream<T> implements Stream<T> {}
@@ -473,7 +471,6 @@ int f() async {}
   }
 
   test_illegalAsyncReturnType_function_subtypeOfFuture() async {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
     await assertErrorsInCode('''
 import 'dart:async';
 abstract class SubFuture<T> implements Future<T> {}
@@ -495,7 +492,6 @@ class C {
   }
 
   test_illegalAsyncReturnType_method_subtypeOfFuture() async {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
     await assertErrorsInCode('''
 import 'dart:async';
 abstract class SubFuture<T> implements Future<T> {}
@@ -514,7 +510,6 @@ int f() sync* {}
   }
 
   test_illegalSyncGeneratorReturnType_function_subclassOfIterator() async {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
     await assertErrorsInCode('''
 abstract class SubIterator<T> implements Iterator<T> {}
 SubIterator<int> f() sync* {}
@@ -530,49 +525,12 @@ class C {
   }
 
   test_illegalSyncGeneratorReturnType_method_subclassOfIterator() async {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
     await assertErrorsInCode('''
 abstract class SubIterator<T> implements Iterator<T> {}
 class C {
   SubIterator<int> f() sync* {}
 }
 ''', [StaticTypeWarningCode.ILLEGAL_SYNC_GENERATOR_RETURN_TYPE]);
-  }
-
-  test_inconsistentMethodInheritance_paramCount() async {
-    await assertErrorsInCode(r'''
-abstract class A {
-  int x();
-}
-abstract class B {
-  int x(int y);
-}
-class C implements A, B {
-}''', [StaticTypeWarningCode.INCONSISTENT_METHOD_INHERITANCE]);
-  }
-
-  test_inconsistentMethodInheritance_paramType() async {
-    await assertErrorsInCode(r'''
-abstract class A {
-  x(int i);
-}
-abstract class B {
-  x(String s);
-}
-abstract class C implements A, B {}
-''', [StaticTypeWarningCode.INCONSISTENT_METHOD_INHERITANCE]);
-  }
-
-  test_inconsistentMethodInheritance_returnType() async {
-    await assertErrorsInCode(r'''
-abstract class A {
-  int x();
-}
-abstract class B {
-  String x();
-}
-abstract class C implements A, B {}
-''', [StaticTypeWarningCode.INCONSISTENT_METHOD_INHERITANCE]);
   }
 
   test_instanceAccessToStaticMember_method_invocation() async {
@@ -1114,7 +1072,6 @@ var b = 1 is G<B>;
   }
 
   test_typeArgumentNotMatchingBounds_methodInvocation_localFunction() async {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
     await assertErrorsInCode(r'''
 class Point<T extends num> {
   Point(T x, T y);
@@ -1130,7 +1087,6 @@ main() {
   }
 
   test_typeArgumentNotMatchingBounds_methodInvocation_method() async {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
     await assertErrorsInCode(r'''
 class Point<T extends num> {
   Point(T x, T y);
@@ -1149,7 +1105,6 @@ f(PointFactory factory) {
   }
 
   test_typeArgumentNotMatchingBounds_methodInvocation_topLevelFunction() async {
-    resetWith(options: new AnalysisOptionsImpl()..strongMode = true);
     await assertErrorsInCode(r'''
 class Point<T extends num> {
   Point(T x, T y);
@@ -1778,81 +1733,6 @@ main() {
 }''', [StaticTypeWarningCode.UNDEFINED_SETTER]);
   }
 
-  test_undefinedSuperGetter() async {
-    await assertErrorsInCode(r'''
-class A {}
-class B extends A {
-  get g {
-    return super.g;
-  }
-}''', [StaticTypeWarningCode.UNDEFINED_SUPER_GETTER]);
-  }
-
-  test_undefinedSuperMethod() async {
-    await assertErrorsInCode(r'''
-class A {}
-class B extends A {
-  m() { return super.m(); }
-}''', [StaticTypeWarningCode.UNDEFINED_SUPER_METHOD]);
-  }
-
-  test_undefinedSuperOperator_binaryExpression() async {
-    await assertErrorsInUnverifiedCode(r'''
-class A {}
-class B extends A {
-  operator +(value) {
-    return super + value;
-  }
-}''', [StaticTypeWarningCode.UNDEFINED_SUPER_OPERATOR]);
-  }
-
-  test_undefinedSuperOperator_indexBoth() async {
-    await assertErrorsInUnverifiedCode(r'''
-class A {}
-class B extends A {
-  operator [](index) {
-    return super[index]++;
-  }
-}''', [StaticTypeWarningCode.UNDEFINED_SUPER_OPERATOR]);
-  }
-
-  test_undefinedSuperOperator_indexGetter() async {
-    await assertErrorsInUnverifiedCode(r'''
-class A {}
-class B extends A {
-  operator [](index) {
-    return super[index + 1];
-  }
-}''', [StaticTypeWarningCode.UNDEFINED_SUPER_OPERATOR]);
-  }
-
-  test_undefinedSuperOperator_indexSetter() async {
-    await assertErrorsInUnverifiedCode(
-        r'''
-class A {}
-class B extends A {
-  operator []=(index, value) {
-    return super[index] = 0;
-  }
-}''',
-        previewDart2
-            ? [
-                StaticTypeWarningCode.RETURN_OF_INVALID_TYPE,
-                StaticTypeWarningCode.UNDEFINED_SUPER_OPERATOR
-              ]
-            : [StaticTypeWarningCode.UNDEFINED_SUPER_OPERATOR]);
-  }
-
-  test_undefinedSuperSetter() async {
-    await assertErrorsInCode(r'''
-class A {}
-class B extends A {
-  f() {
-    super.m = 0;
-  }
-}''', [StaticTypeWarningCode.UNDEFINED_SUPER_SETTER]);
-  }
-
   test_unqualifiedReferenceToNonLocalStaticMember_getter() async {
     await assertErrorsInCode(r'''
 class A {
@@ -1903,6 +1783,18 @@ class B extends A {
 }''', [StaticTypeWarningCode.UNQUALIFIED_REFERENCE_TO_NON_LOCAL_STATIC_MEMBER]);
   }
 
+  test_wrongNumberOfTypeArguments_class_tooFew() async {
+    await assertErrorsInCode(r'''
+class A<E, F> {}
+A<A> a = null;''', [StaticTypeWarningCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS]);
+  }
+
+  test_wrongNumberOfTypeArguments_class_tooMany() async {
+    await assertErrorsInCode(r'''
+class A<E> {}
+A<A, A> a = null;''', [StaticTypeWarningCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS]);
+  }
+
   test_wrongNumberOfTypeArguments_classAlias() async {
     await assertErrorsInCode(r'''
 class A {}
@@ -1911,16 +1803,18 @@ class B<F extends num> = A<F> with M;''',
         [StaticTypeWarningCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS]);
   }
 
-  test_wrongNumberOfTypeArguments_tooFew() async {
+  test_wrongNumberOfTypeArguments_dynamic() async {
     await assertErrorsInCode(r'''
-class A<E, F> {}
-A<A> a = null;''', [StaticTypeWarningCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS]);
+dynamic<int> v;
+''', [StaticTypeWarningCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS]);
   }
 
-  test_wrongNumberOfTypeArguments_tooMany() async {
+  test_wrongNumberOfTypeArguments_typeParameter() async {
     await assertErrorsInCode(r'''
-class A<E> {}
-A<A, A> a = null;''', [StaticTypeWarningCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS]);
+class C<T> {
+  T<int> f;
+}
+''', [StaticTypeWarningCode.WRONG_NUMBER_OF_TYPE_ARGUMENTS]);
   }
 
   test_wrongNumberOfTypeArguments_typeTest_tooFew() async {
@@ -2044,7 +1938,6 @@ class StrongModeStaticTypeWarningCodeTest extends ResolverTestCase {
   void setUp() {
     super.setUp();
     AnalysisOptionsImpl options = new AnalysisOptionsImpl();
-    options.strongMode = true;
     resetWith(options: options);
   }
 

@@ -95,7 +95,7 @@ def TargetCpuForArch(arch, target_os):
     return 'x64'
   if arch == 'simdbc':
     return 'arm' if target_os == 'android' else 'x86'
-  if arch == 'simdbc64':
+  if arch in ['simdbc64']:
     return 'arm64' if target_os == 'android' else 'x64'
   if arch == 'armsimdbc':
     return 'arm'
@@ -185,6 +185,8 @@ def ToGnArgs(args, mode, arch, target_os):
   # Linux and Windows.
   if gn_args['target_os'] in ['linux', 'win']:
     gn_args['dart_use_fallback_root_certificates'] = True
+
+  gn_args['dart_platform_bytecode'] = args.bytecode
 
   gn_args['dart_zlib_path'] = "//runtime/bin/zlib"
 
@@ -370,6 +372,10 @@ def parse_args(args):
       help='Disable ASAN',
       dest='asan',
       action='store_false')
+  other_group.add_argument('--bytecode', '-b',
+      help='Include bytecode in the VMs platform dill',
+      default=False,
+      action="store_true")
   other_group.add_argument('--clang',
       help='Use Clang',
       default=True,

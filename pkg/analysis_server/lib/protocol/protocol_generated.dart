@@ -1904,6 +1904,270 @@ class AnalysisGetReachableSourcesResult implements ResponseResult {
 }
 
 /**
+ * analysis.getSignature params
+ *
+ * {
+ *   "file": FilePath
+ *   "offset": int
+ * }
+ *
+ * Clients may not extend, implement or mix-in this class.
+ */
+class AnalysisGetSignatureParams implements RequestParams {
+  String _file;
+
+  int _offset;
+
+  /**
+   * The file in which signature information is being requested.
+   */
+  String get file => _file;
+
+  /**
+   * The file in which signature information is being requested.
+   */
+  void set file(String value) {
+    assert(value != null);
+    this._file = value;
+  }
+
+  /**
+   * The location for which signature information is being requested.
+   */
+  int get offset => _offset;
+
+  /**
+   * The location for which signature information is being requested.
+   */
+  void set offset(int value) {
+    assert(value != null);
+    this._offset = value;
+  }
+
+  AnalysisGetSignatureParams(String file, int offset) {
+    this.file = file;
+    this.offset = offset;
+  }
+
+  factory AnalysisGetSignatureParams.fromJson(
+      JsonDecoder jsonDecoder, String jsonPath, Object json) {
+    if (json == null) {
+      json = {};
+    }
+    if (json is Map) {
+      String file;
+      if (json.containsKey("file")) {
+        file = jsonDecoder.decodeString(jsonPath + ".file", json["file"]);
+      } else {
+        throw jsonDecoder.mismatch(jsonPath, "file");
+      }
+      int offset;
+      if (json.containsKey("offset")) {
+        offset = jsonDecoder.decodeInt(jsonPath + ".offset", json["offset"]);
+      } else {
+        throw jsonDecoder.mismatch(jsonPath, "offset");
+      }
+      return new AnalysisGetSignatureParams(file, offset);
+    } else {
+      throw jsonDecoder.mismatch(
+          jsonPath, "analysis.getSignature params", json);
+    }
+  }
+
+  factory AnalysisGetSignatureParams.fromRequest(Request request) {
+    return new AnalysisGetSignatureParams.fromJson(
+        new RequestDecoder(request), "params", request.params);
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    Map<String, dynamic> result = {};
+    result["file"] = file;
+    result["offset"] = offset;
+    return result;
+  }
+
+  @override
+  Request toRequest(String id) {
+    return new Request(id, "analysis.getSignature", toJson());
+  }
+
+  @override
+  String toString() => json.encode(toJson());
+
+  @override
+  bool operator ==(other) {
+    if (other is AnalysisGetSignatureParams) {
+      return file == other.file && offset == other.offset;
+    }
+    return false;
+  }
+
+  @override
+  int get hashCode {
+    int hash = 0;
+    hash = JenkinsSmiHash.combine(hash, file.hashCode);
+    hash = JenkinsSmiHash.combine(hash, offset.hashCode);
+    return JenkinsSmiHash.finish(hash);
+  }
+}
+
+/**
+ * analysis.getSignature result
+ *
+ * {
+ *   "name": String
+ *   "dartdoc": optional String
+ *   "parameters": List<ParameterInfo>
+ * }
+ *
+ * Clients may not extend, implement or mix-in this class.
+ */
+class AnalysisGetSignatureResult implements ResponseResult {
+  String _name;
+
+  String _dartdoc;
+
+  List<ParameterInfo> _parameters;
+
+  /**
+   * The name of the function being invoked at the given offset.
+   */
+  String get name => _name;
+
+  /**
+   * The name of the function being invoked at the given offset.
+   */
+  void set name(String value) {
+    assert(value != null);
+    this._name = value;
+  }
+
+  /**
+   * The dartdoc associated with the function being invoked. Other than the
+   * removal of the comment delimiters, including leading asterisks in the case
+   * of a block comment, the dartdoc is unprocessed markdown. This data is
+   * omitted if there is no referenced element, or if the element has no
+   * dartdoc.
+   */
+  String get dartdoc => _dartdoc;
+
+  /**
+   * The dartdoc associated with the function being invoked. Other than the
+   * removal of the comment delimiters, including leading asterisks in the case
+   * of a block comment, the dartdoc is unprocessed markdown. This data is
+   * omitted if there is no referenced element, or if the element has no
+   * dartdoc.
+   */
+  void set dartdoc(String value) {
+    this._dartdoc = value;
+  }
+
+  /**
+   * A list of information about each of the parameters of the function being
+   * invoked.
+   */
+  List<ParameterInfo> get parameters => _parameters;
+
+  /**
+   * A list of information about each of the parameters of the function being
+   * invoked.
+   */
+  void set parameters(List<ParameterInfo> value) {
+    assert(value != null);
+    this._parameters = value;
+  }
+
+  AnalysisGetSignatureResult(String name, List<ParameterInfo> parameters,
+      {String dartdoc}) {
+    this.name = name;
+    this.dartdoc = dartdoc;
+    this.parameters = parameters;
+  }
+
+  factory AnalysisGetSignatureResult.fromJson(
+      JsonDecoder jsonDecoder, String jsonPath, Object json) {
+    if (json == null) {
+      json = {};
+    }
+    if (json is Map) {
+      String name;
+      if (json.containsKey("name")) {
+        name = jsonDecoder.decodeString(jsonPath + ".name", json["name"]);
+      } else {
+        throw jsonDecoder.mismatch(jsonPath, "name");
+      }
+      String dartdoc;
+      if (json.containsKey("dartdoc")) {
+        dartdoc =
+            jsonDecoder.decodeString(jsonPath + ".dartdoc", json["dartdoc"]);
+      }
+      List<ParameterInfo> parameters;
+      if (json.containsKey("parameters")) {
+        parameters = jsonDecoder.decodeList(
+            jsonPath + ".parameters",
+            json["parameters"],
+            (String jsonPath, Object json) =>
+                new ParameterInfo.fromJson(jsonDecoder, jsonPath, json));
+      } else {
+        throw jsonDecoder.mismatch(jsonPath, "parameters");
+      }
+      return new AnalysisGetSignatureResult(name, parameters, dartdoc: dartdoc);
+    } else {
+      throw jsonDecoder.mismatch(
+          jsonPath, "analysis.getSignature result", json);
+    }
+  }
+
+  factory AnalysisGetSignatureResult.fromResponse(Response response) {
+    return new AnalysisGetSignatureResult.fromJson(
+        new ResponseDecoder(REQUEST_ID_REFACTORING_KINDS.remove(response.id)),
+        "result",
+        response.result);
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    Map<String, dynamic> result = {};
+    result["name"] = name;
+    if (dartdoc != null) {
+      result["dartdoc"] = dartdoc;
+    }
+    result["parameters"] =
+        parameters.map((ParameterInfo value) => value.toJson()).toList();
+    return result;
+  }
+
+  @override
+  Response toResponse(String id) {
+    return new Response(id, result: toJson());
+  }
+
+  @override
+  String toString() => json.encode(toJson());
+
+  @override
+  bool operator ==(other) {
+    if (other is AnalysisGetSignatureResult) {
+      return name == other.name &&
+          dartdoc == other.dartdoc &&
+          listEqual(parameters, other.parameters,
+              (ParameterInfo a, ParameterInfo b) => a == b);
+    }
+    return false;
+  }
+
+  @override
+  int get hashCode {
+    int hash = 0;
+    hash = JenkinsSmiHash.combine(hash, name.hashCode);
+    hash = JenkinsSmiHash.combine(hash, dartdoc.hashCode);
+    hash = JenkinsSmiHash.combine(hash, parameters.hashCode);
+    return JenkinsSmiHash.finish(hash);
+  }
+}
+
+/**
  * analysis.highlights params
  *
  * {
@@ -7942,7 +8206,7 @@ class EditImportElementsParams implements RequestParams {
  * edit.importElements result
  *
  * {
- *   "edit": SourceFileEdit
+ *   "edit": optional SourceFileEdit
  * }
  *
  * Clients may not extend, implement or mix-in this class.
@@ -7955,7 +8219,8 @@ class EditImportElementsResult implements ResponseResult {
    * accessible. The file to be edited will be the defining compilation unit of
    * the library containing the file specified in the request, which can be
    * different than the file specified in the request if the specified file is
-   * a part file.
+   * a part file. This field will be omitted if there are no edits that need to
+   * be applied.
    */
   SourceFileEdit get edit => _edit;
 
@@ -7964,14 +8229,14 @@ class EditImportElementsResult implements ResponseResult {
    * accessible. The file to be edited will be the defining compilation unit of
    * the library containing the file specified in the request, which can be
    * different than the file specified in the request if the specified file is
-   * a part file.
+   * a part file. This field will be omitted if there are no edits that need to
+   * be applied.
    */
   void set edit(SourceFileEdit value) {
-    assert(value != null);
     this._edit = value;
   }
 
-  EditImportElementsResult(SourceFileEdit edit) {
+  EditImportElementsResult({SourceFileEdit edit}) {
     this.edit = edit;
   }
 
@@ -7985,10 +8250,8 @@ class EditImportElementsResult implements ResponseResult {
       if (json.containsKey("edit")) {
         edit = new SourceFileEdit.fromJson(
             jsonDecoder, jsonPath + ".edit", json["edit"]);
-      } else {
-        throw jsonDecoder.mismatch(jsonPath, "edit");
       }
-      return new EditImportElementsResult(edit);
+      return new EditImportElementsResult(edit: edit);
     } else {
       throw jsonDecoder.mismatch(jsonPath, "edit.importElements result", json);
     }
@@ -8004,7 +8267,9 @@ class EditImportElementsResult implements ResponseResult {
   @override
   Map<String, dynamic> toJson() {
     Map<String, dynamic> result = {};
-    result["edit"] = edit.toJson();
+    if (edit != null) {
+      result["edit"] = edit.toJson();
+    }
     return result;
   }
 
@@ -8736,6 +9001,7 @@ class EditSortMembersResult implements ResponseResult {
  *   "codeOffset": int
  *   "codeLength": int
  *   "className": optional String
+ *   "mixinName": optional String
  *   "parameters": optional String
  * }
  *
@@ -8759,6 +9025,8 @@ class ElementDeclaration implements HasToJson {
   int _codeLength;
 
   String _className;
+
+  String _mixinName;
 
   String _parameters;
 
@@ -8881,6 +9149,20 @@ class ElementDeclaration implements HasToJson {
   }
 
   /**
+   * The name of the mixin enclosing this declaration. If the declaration is
+   * not a mixin member, this field will be absent.
+   */
+  String get mixinName => _mixinName;
+
+  /**
+   * The name of the mixin enclosing this declaration. If the declaration is
+   * not a mixin member, this field will be absent.
+   */
+  void set mixinName(String value) {
+    this._mixinName = value;
+  }
+
+  /**
    * The parameter list for the element. If the element is not a method or
    * function this field will not be defined. If the element doesn't have
    * parameters (e.g. getter), this field will not be defined. If the element
@@ -8904,7 +9186,7 @@ class ElementDeclaration implements HasToJson {
 
   ElementDeclaration(String name, ElementKind kind, int fileIndex, int offset,
       int line, int column, int codeOffset, int codeLength,
-      {String className, String parameters}) {
+      {String className, String mixinName, String parameters}) {
     this.name = name;
     this.kind = kind;
     this.fileIndex = fileIndex;
@@ -8914,6 +9196,7 @@ class ElementDeclaration implements HasToJson {
     this.codeOffset = codeOffset;
     this.codeLength = codeLength;
     this.className = className;
+    this.mixinName = mixinName;
     this.parameters = parameters;
   }
 
@@ -8980,6 +9263,11 @@ class ElementDeclaration implements HasToJson {
         className = jsonDecoder.decodeString(
             jsonPath + ".className", json["className"]);
       }
+      String mixinName;
+      if (json.containsKey("mixinName")) {
+        mixinName = jsonDecoder.decodeString(
+            jsonPath + ".mixinName", json["mixinName"]);
+      }
       String parameters;
       if (json.containsKey("parameters")) {
         parameters = jsonDecoder.decodeString(
@@ -8987,7 +9275,7 @@ class ElementDeclaration implements HasToJson {
       }
       return new ElementDeclaration(
           name, kind, fileIndex, offset, line, column, codeOffset, codeLength,
-          className: className, parameters: parameters);
+          className: className, mixinName: mixinName, parameters: parameters);
     } else {
       throw jsonDecoder.mismatch(jsonPath, "ElementDeclaration", json);
     }
@@ -9006,6 +9294,9 @@ class ElementDeclaration implements HasToJson {
     result["codeLength"] = codeLength;
     if (className != null) {
       result["className"] = className;
+    }
+    if (mixinName != null) {
+      result["mixinName"] = mixinName;
     }
     if (parameters != null) {
       result["parameters"] = parameters;
@@ -9028,6 +9319,7 @@ class ElementDeclaration implements HasToJson {
           codeOffset == other.codeOffset &&
           codeLength == other.codeLength &&
           className == other.className &&
+          mixinName == other.mixinName &&
           parameters == other.parameters;
     }
     return false;
@@ -9045,6 +9337,7 @@ class ElementDeclaration implements HasToJson {
     hash = JenkinsSmiHash.combine(hash, codeOffset.hashCode);
     hash = JenkinsSmiHash.combine(hash, codeLength.hashCode);
     hash = JenkinsSmiHash.combine(hash, className.hashCode);
+    hash = JenkinsSmiHash.combine(hash, mixinName.hashCode);
     hash = JenkinsSmiHash.combine(hash, parameters.hashCode);
     return JenkinsSmiHash.finish(hash);
   }
@@ -15309,6 +15602,9 @@ class RequestError implements HasToJson {
  *   GET_KYTHE_ENTRIES_INVALID_FILE
  *   GET_NAVIGATION_INVALID_FILE
  *   GET_REACHABLE_SOURCES_INVALID_FILE
+ *   GET_SIGNATURE_INVALID_FILE
+ *   GET_SIGNATURE_INVALID_OFFSET
+ *   GET_SIGNATURE_UNKNOWN_FUNCTION
  *   IMPORT_ELEMENTS_INVALID_FILE
  *   INVALID_ANALYSIS_ROOT
  *   INVALID_EXECUTION_CONTEXT
@@ -15399,6 +15695,27 @@ class RequestErrorCode implements Enum {
    */
   static const RequestErrorCode GET_REACHABLE_SOURCES_INVALID_FILE =
       const RequestErrorCode._("GET_REACHABLE_SOURCES_INVALID_FILE");
+
+  /**
+   * An "analysis.getSignature" request specified a FilePath which does not
+   * match a file currently subject to analysis.
+   */
+  static const RequestErrorCode GET_SIGNATURE_INVALID_FILE =
+      const RequestErrorCode._("GET_SIGNATURE_INVALID_FILE");
+
+  /**
+   * An "analysis.getSignature" request specified an offset which is not a
+   * valid location within for the contents of the file specified FilePath.
+   */
+  static const RequestErrorCode GET_SIGNATURE_INVALID_OFFSET =
+      const RequestErrorCode._("GET_SIGNATURE_INVALID_OFFSET");
+
+  /**
+   * An "analysis.getSignature" request specified an offset that could not be
+   * matched to a function call.
+   */
+  static const RequestErrorCode GET_SIGNATURE_UNKNOWN_FUNCTION =
+      const RequestErrorCode._("GET_SIGNATURE_UNKNOWN_FUNCTION");
 
   /**
    * An "edit.importElements" request specified a FilePath that does not match
@@ -15540,6 +15857,9 @@ class RequestErrorCode implements Enum {
     GET_KYTHE_ENTRIES_INVALID_FILE,
     GET_NAVIGATION_INVALID_FILE,
     GET_REACHABLE_SOURCES_INVALID_FILE,
+    GET_SIGNATURE_INVALID_FILE,
+    GET_SIGNATURE_INVALID_OFFSET,
+    GET_SIGNATURE_UNKNOWN_FUNCTION,
     IMPORT_ELEMENTS_INVALID_FILE,
     INVALID_ANALYSIS_ROOT,
     INVALID_EXECUTION_CONTEXT,
@@ -15586,6 +15906,12 @@ class RequestErrorCode implements Enum {
         return GET_NAVIGATION_INVALID_FILE;
       case "GET_REACHABLE_SOURCES_INVALID_FILE":
         return GET_REACHABLE_SOURCES_INVALID_FILE;
+      case "GET_SIGNATURE_INVALID_FILE":
+        return GET_SIGNATURE_INVALID_FILE;
+      case "GET_SIGNATURE_INVALID_OFFSET":
+        return GET_SIGNATURE_INVALID_OFFSET;
+      case "GET_SIGNATURE_UNKNOWN_FUNCTION":
+        return GET_SIGNATURE_UNKNOWN_FUNCTION;
       case "IMPORT_ELEMENTS_INVALID_FILE":
         return IMPORT_ELEMENTS_INVALID_FILE;
       case "INVALID_ANALYSIS_ROOT":
@@ -18578,12 +18904,16 @@ class ServerStatusParams implements HasToJson {
   /**
    * The current status of pub execution, indicating whether we are currently
    * running pub.
+   *
+   * Note: this status type is deprecated, and is no longer sent by the server.
    */
   PubStatus get pub => _pub;
 
   /**
    * The current status of pub execution, indicating whether we are currently
    * running pub.
+   *
+   * Note: this status type is deprecated, and is no longer sent by the server.
    */
   void set pub(PubStatus value) {
     this._pub = value;

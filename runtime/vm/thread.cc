@@ -60,6 +60,7 @@ Thread::Thread(Isolate* isolate)
     : BaseThread(false),
       stack_limit_(0),
       stack_overflow_flags_(0),
+      write_barrier_mask_(RawObject::kGenerationalBarrierMask),
       isolate_(NULL),
       heap_(NULL),
       top_(0),
@@ -92,10 +93,8 @@ Thread::Thread(Isolate* isolate)
       deferred_interrupts_mask_(0),
       deferred_interrupts_(0),
       stack_overflow_count_(0),
-      cha_(NULL),
       hierarchy_info_(NULL),
       type_usage_info_(NULL),
-      deopt_id_(0),
       pending_functions_(GrowableObjectArray::null()),
       active_exception_(Object::null()),
       active_stacktrace_(Object::null()),
@@ -117,6 +116,13 @@ Thread::Thread(Isolate* isolate)
   member_name = default_init_value;
   CACHED_CONSTANTS_LIST(DEFAULT_INIT)
 #undef DEFAULT_INIT
+
+#if defined(TARGET_ARCH_ARM) || defined(TARGET_ARCH_ARM64) ||                  \
+    defined(TARGET_ARCH_X64)
+  for (intptr_t i = 0; i < kNumberOfDartAvailableCpuRegs; ++i) {
+    write_barrier_wrappers_entry_points_[i] = 0;
+  }
+#endif
 
 #define DEFAULT_INIT(name) name##_entry_point_ = 0;
   RUNTIME_ENTRY_LIST(DEFAULT_INIT)
@@ -204,6 +210,15 @@ void Thread::InitVMConstants() {
   member_name = (init_expr);
   CACHED_CONSTANTS_LIST(INIT_VALUE)
 #undef INIT_VALUE
+
+#if defined(TARGET_ARCH_ARM) || defined(TARGET_ARCH_ARM64) ||                  \
+    defined(TARGET_ARCH_X64)
+  for (intptr_t i = 0; i < kNumberOfDartAvailableCpuRegs; ++i) {
+    write_barrier_wrappers_entry_points_[i] =
+        StubCode::WriteBarrierWrappers_entry()->EntryPoint() +
+        i * kStoreBufferWrapperSize;
+  }
+#endif
 
 #define INIT_VALUE(name)                                                       \
   ASSERT(name##_entry_point_ == 0);                                            \
@@ -450,25 +465,6 @@ bool Thread::ZoneIsOwnedByThread(Zone* zone) const {
     current = current->previous();
   }
   return false;
-}
-
-void Thread::SetHighWatermark(intptr_t value) {
-  zone_high_watermark_ = value;
-
-#if !defined(PRODUCT)
-  if ((isolate()->name() != NULL)) {
-    TimelineEvent* event = Timeline::GetZoneStream()->StartEvent();
-    if (event != NULL) {
-      event->Counter(strdup(isolate()->name()));
-      event->set_owns_label(true);
-      // Prevent Catapult from showing "isolateId" as another series.
-      event->set_isolate_id(ILLEGAL_PORT);
-      event->SetNumArguments(1);
-      event->FormatArgument(0, "zoneHighWatermark", "%" Pd, value);
-      event->Complete();
-    }
-  }
-#endif
 }
 
 void Thread::DeferOOBMessageInterrupts() {

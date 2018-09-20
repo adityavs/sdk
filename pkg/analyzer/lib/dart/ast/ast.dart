@@ -218,7 +218,11 @@ abstract class ArgumentList extends AstNode {
    * list to the given list of [parameters]. The list of parameters must be the
    * same length as the number of arguments, but can contain `null` entries if a
    * given argument does not correspond to a formal parameter.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [correspondingStaticParameters] instead.
    */
+  @deprecated
   void set correspondingPropagatedParameters(List<ParameterElement> parameters);
 
   /**
@@ -444,6 +448,7 @@ abstract class AstNode implements SyntacticEntity {
   /**
    * An empty list of AST nodes.
    */
+  @deprecated
   static const List<AstNode> EMPTY_LIST = const <AstNode>[];
 
   /**
@@ -520,6 +525,11 @@ abstract class AstNode implements SyntacticEntity {
   E accept<E>(AstVisitor<E> visitor);
 
   /**
+   * Return the token before [target] or `null` if it cannot be found.
+   */
+  Token findPrevious(Token target);
+
+  /**
    * Return the most immediate ancestor of this node for which the [predicate]
    * returns `true`, or `null` if there is no such ancestor. Note that this node
    * will never be returned.
@@ -531,11 +541,6 @@ abstract class AstNode implements SyntacticEntity {
    * node does not have a property with the given name.
    */
   E getProperty<E>(String name);
-
-  /**
-   * Return the token before [target] or `null` if it cannot be found.
-   */
-  Token findPrevious(Token target);
 
   /**
    * Set the value of the property with the given [name] to the given [value].
@@ -712,6 +717,8 @@ abstract class AstVisitor<R> {
 
   R visitMethodInvocation(MethodInvocation node);
 
+  R visitMixinDeclaration(MixinDeclaration node);
+
   R visitNamedExpression(NamedExpression node);
 
   R visitNativeClause(NativeClause node);
@@ -719,6 +726,8 @@ abstract class AstVisitor<R> {
   R visitNativeFunctionBody(NativeFunctionBody node);
 
   R visitNullLiteral(NullLiteral node);
+
+  R visitOnClause(OnClause node);
 
   R visitParenthesizedExpression(ParenthesizedExpression node);
 
@@ -1175,7 +1184,7 @@ abstract class CatchClause extends AstNode {
  *
  * Clients may not extend, implement or mix-in this class.
  */
-abstract class ClassDeclaration extends NamedCompilationUnitMember {
+abstract class ClassDeclaration extends ClassOrMixinDeclaration {
   /**
    * Return the 'abstract' keyword, or `null` if the keyword was absent.
    */
@@ -1196,6 +1205,7 @@ abstract class ClassDeclaration extends NamedCompilationUnitMember {
    */
   void set classKeyword(Token token);
 
+  @deprecated
   @override
   ClassElement get element;
 
@@ -1211,12 +1221,6 @@ abstract class ClassDeclaration extends NamedCompilationUnitMember {
   void set extendsClause(ExtendsClause extendsClause);
 
   /**
-   * Return the implements clause for the class, or `null` if the class does not
-   * implement any interfaces.
-   */
-  ImplementsClause get implementsClause;
-
-  /**
    * Set the implements clause for the class to the given [implementsClause].
    */
   void set implementsClause(ImplementsClause implementsClause);
@@ -1227,19 +1231,9 @@ abstract class ClassDeclaration extends NamedCompilationUnitMember {
   bool get isAbstract;
 
   /**
-   * Return the left curly bracket.
-   */
-  Token get leftBracket;
-
-  /**
    * Set the left curly bracket to the given [token].
    */
   void set leftBracket(Token token);
-
-  /**
-   * Return the members defined by the class.
-   */
-  NodeList<ClassMember> get members;
 
   /**
    * Return the native clause for this class, or `null` if the class does not
@@ -1253,20 +1247,9 @@ abstract class ClassDeclaration extends NamedCompilationUnitMember {
   void set nativeClause(NativeClause nativeClause);
 
   /**
-   * Return the right curly bracket.
-   */
-  Token get rightBracket;
-
-  /**
    * Set the right curly bracket to the given [token].
    */
   void set rightBracket(Token token);
-
-  /**
-   * Return the type parameters for the class, or `null` if the class does not
-   * have any type parameters.
-   */
-  TypeParameterList get typeParameters;
 
   /**
    * Set the type parameters for the class to the given list of [typeParameters].
@@ -1290,18 +1273,6 @@ abstract class ClassDeclaration extends NamedCompilationUnitMember {
    * default constructor will be searched for.
    */
   ConstructorDeclaration getConstructor(String name);
-
-  /**
-   * Return the field declared in the class with the given [name], or `null` if
-   * there is no such field.
-   */
-  VariableDeclaration getField(String name);
-
-  /**
-   * Return the method declared in the class with the given [name], or `null` if
-   * there is no such method.
-   */
-  MethodDeclaration getMethod(String name);
 }
 
 /**
@@ -1310,6 +1281,53 @@ abstract class ClassDeclaration extends NamedCompilationUnitMember {
  * Clients may not extend, implement or mix-in this class.
  */
 abstract class ClassMember extends Declaration {}
+
+/**
+ * The declaration of a class or mixin.
+ */
+abstract class ClassOrMixinDeclaration extends NamedCompilationUnitMember {
+  @override
+  ClassElement get declaredElement;
+
+  /**
+   * Returns the implements clause for the class/mixin, or `null` if the
+   * class/mixin does not implement any interfaces.
+   */
+  ImplementsClause get implementsClause;
+
+  /**
+   * Returns the left curly bracket.
+   */
+  Token get leftBracket;
+
+  /**
+   * Returns the members defined by the class/mixin.
+   */
+  NodeList<ClassMember> get members;
+
+  /**
+   * Returns the right curly bracket.
+   */
+  Token get rightBracket;
+
+  /**
+   * Returns the type parameters for the class/mixin, or `null` if the
+   * class/mixin does not have any type parameters.
+   */
+  TypeParameterList get typeParameters;
+
+  /**
+   * Returns the field declared in the class/mixin with the given [name], or
+   * `null` if there is no such field.
+   */
+  VariableDeclaration getField(String name);
+
+  /**
+   * Returns the method declared in the class/mixin with the given [name], or
+   * `null` if there is no such method.
+   */
+  MethodDeclaration getMethod(String name);
+}
 
 /**
  * A class type alias.
@@ -1533,6 +1551,12 @@ abstract class CompilationUnit extends AstNode {
   NodeList<CompilationUnitMember> get declarations;
 
   /**
+   * Return the element associated with this compilation unit, or `null` if the
+   * AST structure has not been resolved.
+   */
+  CompilationUnitElement get declaredElement;
+
+  /**
    * Return the directives contained in this compilation unit.
    */
   NodeList<Directive> get directives;
@@ -1541,6 +1565,7 @@ abstract class CompilationUnit extends AstNode {
    * Return the element associated with this compilation unit, or `null` if the
    * AST structure has not been resolved.
    */
+  @deprecated
   CompilationUnitElement get element;
 
   /**
@@ -1833,6 +1858,10 @@ abstract class ConstructorDeclaration extends ClassMember {
   void set constKeyword(Token token);
 
   @override
+  ConstructorElement get declaredElement;
+
+  @override
+  @deprecated
   ConstructorElement get element;
 
   /**
@@ -2149,6 +2178,14 @@ abstract class Declaration extends AnnotatedNode {
    * this node corresponds to a list of declarations or if the AST structure has
    * not been resolved.
    */
+  Element get declaredElement;
+
+  /**
+   * Return the element associated with this declaration, or `null` if either
+   * this node corresponds to a list of declarations or if the AST structure has
+   * not been resolved.
+   */
+  @deprecated
   Element get element;
 }
 
@@ -2161,6 +2198,10 @@ abstract class Declaration extends AnnotatedNode {
  * Clients may not extend, implement or mix-in this class.
  */
 abstract class DeclaredIdentifier extends Declaration {
+  @override
+  LocalVariableElement get declaredElement;
+
+  @deprecated
   @override
   LocalVariableElement get element;
 
@@ -2501,6 +2542,10 @@ abstract class EnumDeclaration extends NamedCompilationUnitMember {
   NodeList<EnumConstantDeclaration> get constants;
 
   @override
+  ClassElement get declaredElement;
+
+  @deprecated
+  @override
   ClassElement get element;
 
   /**
@@ -2558,6 +2603,7 @@ abstract class Expression extends AstNode {
   /**
    * An empty list of expressions.
    */
+  @deprecated
   static const List<Expression> EMPTY_LIST = const <Expression>[];
 
   /**
@@ -2565,7 +2611,11 @@ abstract class Expression extends AstNode {
    * expression. If type propagation was able to find a better parameter element
    * than static analysis, that type will be returned. Otherwise, the result of
    * static analysis will be returned.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticParameterElement] instead.
    */
+  @deprecated
   ParameterElement get bestParameterElement;
 
   /**
@@ -2574,7 +2624,12 @@ abstract class Expression extends AstNode {
    * will be returned. Otherwise, the result of static analysis will be
    * returned. If no type analysis has been performed, then the type 'dynamic'
    * will be returned.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticType] instead, but be aware that [staticType] will return `null`
+   * under some circumstances, while [bestType] did not.
    */
+  @deprecated
   DartType get bestType;
 
   /**
@@ -2602,18 +2657,30 @@ abstract class Expression extends AstNode {
    * parameters of the function being invoked, then return the parameter element
    * representing the parameter to which the value of this expression will be
    * bound. Otherwise, return `null`.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticParameterElement] instead.
    */
+  @deprecated
   ParameterElement get propagatedParameterElement;
 
   /**
    * Return the propagated type of this expression, or `null` if type
    * propagation has not been performed on the AST structure.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticType] instead.
    */
+  @deprecated
   DartType get propagatedType;
 
   /**
    * Set the propagated type of this expression to the given [type].
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticType] instead.
    */
+  @deprecated
   void set propagatedType(DartType type);
 
   /**
@@ -3013,6 +3080,13 @@ abstract class FormalParameter extends AstNode {
    * Return the element representing this parameter, or `null` if this parameter
    * has not been resolved.
    */
+  ParameterElement get declaredElement;
+
+  /**
+   * Return the element representing this parameter, or `null` if this parameter
+   * has not been resolved.
+   */
+  @deprecated
   ParameterElement get element;
 
   /**
@@ -3363,6 +3437,10 @@ abstract class FunctionBody extends AstNode {
  */
 abstract class FunctionDeclaration extends NamedCompilationUnitMember {
   @override
+  ExecutableElement get declaredElement;
+
+  @deprecated
+  @override
   ExecutableElement get element;
 
   /**
@@ -3461,6 +3539,13 @@ abstract class FunctionExpression extends Expression {
    * Return the element associated with the function, or `null` if the AST
    * structure has not been resolved.
    */
+  ExecutableElement get declaredElement;
+
+  /**
+   * Return the element associated with the function, or `null` if the AST
+   * structure has not been resolved.
+   */
+  @deprecated
   ExecutableElement get element;
 
   /**
@@ -3515,7 +3600,11 @@ abstract class FunctionExpressionInvocation extends InvocationExpression {
    * that element will be returned. Otherwise, the element found using the
    * result of static analysis will be returned. If resolution has not been
    * performed, then `null` will be returned.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticElement] instead.
    */
+  @deprecated
   ExecutableElement get bestElement;
 
   /**
@@ -3534,13 +3623,21 @@ abstract class FunctionExpressionInvocation extends InvocationExpression {
    * Return the element associated with the function being invoked based on
    * propagated type information, or `null` if the AST structure has not been
    * resolved or the function could not be resolved.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticElement] instead.
    */
+  @deprecated
   ExecutableElement get propagatedElement;
 
   /**
    * Set the element associated with the function being invoked based on
    * propagated type information to the given [element].
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticElement] instead.
    */
+  @deprecated
   void set propagatedElement(ExecutableElement element);
 
   /**
@@ -3821,7 +3918,11 @@ abstract class Identifier extends Expression {
    * returned. Otherwise, the element found using the result of static analysis
    * will be returned. If resolution has not been performed, then `null` will be
    * returned.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticElement] instead.
    */
+  @deprecated
   Element get bestElement;
 
   /**
@@ -3834,7 +3935,11 @@ abstract class Identifier extends Expression {
    * information, or `null` if the AST structure has not been resolved or if
    * this identifier could not be resolved. One example of the latter case is an
    * identifier that is not defined within the scope in which it appears.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticElement] instead.
    */
+  @deprecated
   Element get propagatedElement;
 
   /**
@@ -4441,9 +4546,7 @@ abstract class InvocationExpression extends Expression {
    *     o.m<TArgs>(args);   // target will be `m`
    *
    * In either case, the [function.staticType] will be the
-   * [staticInvokeType] before applying type arguments `TArgs`. Similarly,
-   * [function.propagatedType] will be the [propagatedInvokeType]
-   * before applying type arguments `TArgs`.
+   * [staticInvokeType] before applying type arguments `TArgs`.
    */
   Expression get function;
 
@@ -4455,13 +4558,21 @@ abstract class InvocationExpression extends Expression {
    * This will usually be a [FunctionType], but it can also be an
    * [InterfaceType] with a `call` method, `dynamic`, `Function`, or a `@proxy`
    * interface type that implements `Function`.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticInvokeType] instead.
    */
+  @deprecated
   DartType get propagatedInvokeType;
 
   /**
    * Sets the function type of the invocation based on the propagated type
    * information.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticInvokeType] instead.
    */
+  @deprecated
   void set propagatedInvokeType(DartType value);
 
   /**
@@ -4469,9 +4580,9 @@ abstract class InvocationExpression extends Expression {
    * information, or `null` if the AST structure has not been resolved, or if
    * the invoke could not be resolved.
    *
-   * This will usually be a [FunctionType], but it can also be an
-   * [InterfaceType] with a `call` method, `dynamic`, `Function`, or a `@proxy`
-   * interface type that implements `Function`.
+   * This will usually be a [FunctionType], but it can also be `dynamic` or
+   * `Function`. In the case of interface types that have a `call` method, we
+   * store the type of that `call` method here as parameterized.
    */
   DartType get staticInvokeType;
 
@@ -4810,6 +4921,10 @@ abstract class MethodDeclaration extends ClassMember {
   void set body(FunctionBody functionBody);
 
   @override
+  ExecutableElement get declaredElement;
+
+  @deprecated
+  @override
   ExecutableElement get element;
 
   /**
@@ -5019,7 +5134,11 @@ abstract class MethodReferenceExpression {
    * be returned. Otherwise, the element found using the result of static
    * analysis will be returned. If resolution has not been performed, then
    * `null` will be returned.
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticElement] instead.
    */
+  @deprecated
   MethodElement get bestElement;
 
   /**
@@ -5028,13 +5147,21 @@ abstract class MethodReferenceExpression {
    * no meaningful propagated element to return (e.g. because this is a
    * non-compound assignment expression, or because the method referred to could
    * not be resolved).
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticElement] instead.
    */
+  @deprecated
   MethodElement get propagatedElement;
 
   /**
    * Set the element associated with the expression based on propagated types to
    * the given [element].
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticElement] instead.
    */
+  @deprecated
   void set propagatedElement(MethodElement element);
 
   /**
@@ -5051,6 +5178,28 @@ abstract class MethodReferenceExpression {
    * given [element].
    */
   void set staticElement(MethodElement element);
+}
+
+/**
+ * The declaration of a mixin.
+ *
+ *    mixinDeclaration ::=
+ *        metadata? 'mixin' [SimpleIdentifier] [TypeParameterList]?
+ *        [OnClause]? [ImplementsClause]? '{' [ClassMember]* '}'
+ *
+ * Clients may not extend, implement or mix-in this class.
+ */
+abstract class MixinDeclaration extends ClassOrMixinDeclaration {
+  /**
+   * Return the token representing the 'mixin' keyword.
+   */
+  Token get mixinKeyword;
+
+  /**
+   * Return the on clause for the mixin, or `null` if the mixin does not have
+   * any superclass constraints.
+   */
+  OnClause get onClause;
 }
 
 /**
@@ -5410,6 +5559,26 @@ abstract class NullLiteral extends Literal {
    * Set the token representing the literal to the given [token].
    */
   void set literal(Token token);
+}
+
+/**
+ * The "on" clause in a mixin declaration.
+ *
+ *    onClause ::=
+ *        'on' [TypeName] (',' [TypeName])*
+ *
+ * Clients may not extend, implement or mix-in this class.
+ */
+abstract class OnClause extends AstNode {
+  /**
+   * Return the token representing the 'on' keyword.
+   */
+  Token get onKeyword;
+
+  /**
+   * Return the list of the classes are superclass constraints for the mixin.
+   */
+  NodeList<TypeName> get superclassConstraints;
 }
 
 /**
@@ -5954,7 +6123,11 @@ abstract class SimpleIdentifier extends Identifier {
   /**
    * Set the element associated with this identifier based on propagated type
    * information to the given [element].
+   *
+   * Deprecated: The analyzer no longer computes propagated type information.
+   * Use [staticElement] instead.
    */
+  @deprecated
   void set propagatedElement(Element element);
 
   /**
@@ -6826,6 +6999,10 @@ abstract class UriBasedDirective extends Directive {
  * Clients may not extend, implement or mix-in this class.
  */
 abstract class VariableDeclaration extends Declaration {
+  @override
+  VariableElement get declaredElement;
+
+  @deprecated
   @override
   VariableElement get element;
 

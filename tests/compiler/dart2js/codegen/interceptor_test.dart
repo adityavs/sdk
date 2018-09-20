@@ -4,7 +4,7 @@
 
 import 'package:expect/expect.dart';
 import 'package:async_helper/async_helper.dart';
-import '../compiler_helper.dart';
+import '../helpers/compiler_helper.dart';
 
 const String TEST_ONE = r"""
   foo(a) {
@@ -38,8 +38,8 @@ main() {
     // access.
     await compile(TEST_TWO, entry: 'foo', check: (String generated) {
       Expect.isFalse(generated.contains(r'a.get$length()'));
-      Expect
-          .isTrue(generated.contains(new RegExp(r'[$A-Z]+\.A\$\(\)\.length')));
+      Expect.isTrue(
+          generated.contains(new RegExp(r'[$A-Z]+\.A\$\(\)\.length')));
       Expect.isTrue(
           generated.contains(new RegExp(r'[$A-Z]+\.get\$length\$as\(a\)')));
     });

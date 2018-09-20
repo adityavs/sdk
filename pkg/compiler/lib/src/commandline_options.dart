@@ -8,10 +8,6 @@ library dart2js.cmdline.options;
 class Flags {
   static const String allowMockCompilation = '--allow-mock-compilation';
   static const String allowNativeExtensions = '--allow-native-extensions';
-  static const String analyzeAll = '--analyze-all';
-  static const String analyzeMain = '--analyze-main';
-  static const String analyzeOnly = '--analyze-only';
-  static const String analyzeSignaturesOnly = '--analyze-signatures-only';
   static const String disableInlining = '--disable-inlining';
   static const String disableProgramSplit = '--disable-program-split';
   static const String disableDiagnosticColors = '--disable-diagnostic-colors';
@@ -35,16 +31,7 @@ class Flags {
   static const String generateCodeWithCompileTimeErrors =
       '--generate-code-with-compile-time-errors';
 
-  /// TODO(sigmund): delete these flags.
-  static const String useKernel = '--use-kernel';
-  static const String useOldFrontend = '--use-old-frontend';
-
-  static const String strongMode = '--strong';
   static const String previewDart2 = '--preview-dart-2';
-  // Revert to Dart 1.0
-  //
-  // Temporary option to opt-out of Dart 2.0 while migrating.
-  static const String noPreviewDart2 = '--no-preview-dart-2';
 
   static const String omitImplicitChecks = '--omit-implicit-checks';
   static const String laxRuntimeTypeToString = '--lax-runtime-type-to-string';

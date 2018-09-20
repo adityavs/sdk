@@ -63,12 +63,6 @@ ENUM_OPTIONS_LIST(ENUM_OPTION_DEFINITION)
 CB_OPTIONS_LIST(CB_OPTION_DEFINITION)
 #undef CB_OPTION_DEFINITION
 
-void Options::SetDart2Options(CommandLineOptions* vm_options) {
-  vm_options->AddArgument("--strong");
-  vm_options->AddArgument("--reify-generic-functions");
-  vm_options->AddArgument("--sync-async");
-}
-
 void Options::SetDart1Options(CommandLineOptions* vm_options) {
   vm_options->AddArgument("--no-strong");
   vm_options->AddArgument("--no-reify-generic-functions");
@@ -83,7 +77,7 @@ DFE* Options::dfe_ = NULL;
 DEFINE_STRING_OPTION_CB(dfe, { Options::dfe()->set_frontend_filename(value); });
 #endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
-DEFINE_BOOL_OPTION_CB(hot_reload_test_mode, {
+static void hot_reload_test_mode_callback(CommandLineOptions* vm_options) {
   // Identity reload.
   vm_options->AddArgument("--identity_reload");
   // Start reloading quickly.
@@ -94,9 +88,15 @@ DEFINE_BOOL_OPTION_CB(hot_reload_test_mode, {
   vm_options->AddArgument("--reload_every_back_off");
   // Ensure that every isolate has reloaded once before exiting.
   vm_options->AddArgument("--check_reloaded");
-});
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  Options::dfe()->set_use_incremental_compiler(true);
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+}
 
-DEFINE_BOOL_OPTION_CB(hot_reload_rollback_test_mode, {
+DEFINE_BOOL_OPTION_CB(hot_reload_test_mode, hot_reload_test_mode_callback);
+
+static void hot_reload_rollback_test_mode_callback(
+    CommandLineOptions* vm_options) {
   // Identity reload.
   vm_options->AddArgument("--identity_reload");
   // Start reloading quickly.
@@ -109,7 +109,13 @@ DEFINE_BOOL_OPTION_CB(hot_reload_rollback_test_mode, {
   vm_options->AddArgument("--check_reloaded");
   // Force all reloads to fail and execute the rollback code.
   vm_options->AddArgument("--reload_force_rollback");
-});
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  Options::dfe()->set_use_incremental_compiler(true);
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+}
+
+DEFINE_BOOL_OPTION_CB(hot_reload_rollback_test_mode,
+                      hot_reload_rollback_test_mode_callback);
 
 void Options::PrintVersion() {
   Log::PrintErr("Dart VM version: %s\n", Dart_VersionString());
@@ -125,9 +131,6 @@ void Options::PrintUsage() {
   if (!Options::verbose_option()) {
     Log::PrintErr(
 "Common options:\n"
-"--checked or -c\n"
-"  Insert runtime type checks and enable assertions (checked mode, not\n"
-"  compatible with --preview-dart-2).\n"
 "--enable-asserts\n"
 "  Enable assert statements.\n"
 "--help or -h\n"
@@ -159,9 +162,6 @@ void Options::PrintUsage() {
   } else {
     Log::PrintErr(
 "Supported options:\n"
-"--checked or -c\n"
-"  Insert runtime type checks and enable assertions (checked mode, not\n"
-"  compatible with --preview-dart-2).\n"
 "--enable-asserts\n"
 "  Enable assert statements.\n"
 "--help or -h\n"
@@ -221,7 +221,7 @@ void Options::PrintUsage() {
 }
 // clang-format on
 
-dart::HashMap* Options::environment_ = NULL;
+dart::SimpleHashMap* Options::environment_ = NULL;
 bool Options::ProcessEnvironmentOption(const char* arg,
                                        CommandLineOptions* vm_options) {
   return OptionProcessor::ProcessEnvironmentOption(arg, vm_options,
@@ -230,7 +230,7 @@ bool Options::ProcessEnvironmentOption(const char* arg,
 
 void Options::DestroyEnvironment() {
   if (environment_ != NULL) {
-    for (HashMap::Entry* p = environment_->Start(); p != NULL;
+    for (SimpleHashMap::Entry* p = environment_->Start(); p != NULL;
          p = environment_->Next(p)) {
       free(p->key);
       free(p->value);
@@ -296,6 +296,9 @@ bool Options::ProcessEnableVmServiceOption(const char* arg,
         "Use --enable-vm-service[=<port number>[/<bind address>]]\n");
     return false;
   }
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  dfe()->set_use_incremental_compiler(true);
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
 
   return true;
 }
@@ -320,6 +323,9 @@ bool Options::ProcessObserveOption(const char* arg,
   vm_options->AddArgument("--pause-isolates-on-unhandled-exceptions");
   vm_options->AddArgument("--profiler");
   vm_options->AddArgument("--warn-on-pause-with-no-debugger");
+#if !defined(DART_PRECOMPILED_RUNTIME)
+  dfe()->set_use_incremental_compiler(true);
+#endif  // !defined(DART_PRECOMPILED_RUNTIME)
   return true;
 }
 
@@ -335,9 +341,6 @@ int Options::ParseArguments(int argc,
                             bool* verbose_debug_seen) {
   const char* kPrefix = "--";
   const intptr_t kPrefixLen = strlen(kPrefix);
-
-  // Set Dart 2 as the default option.
-  Options::SetDart2Options(vm_options);
 
   // Store the executable name.
   Platform::SetExecutableName(argv[0]);
@@ -422,6 +425,17 @@ int Options::ParseArguments(int argc,
   }
 
   // Verify consistency of arguments.
+
+  // snapshot_depfile is an alias for depfile. Passing them both is an error.
+  if ((snapshot_deps_filename_ != NULL) && (depfile_ != NULL)) {
+    Log::PrintErr("Specify only one of --depfile and --snapshot_depfile\n");
+    return -1;
+  }
+  if (snapshot_deps_filename_ != NULL) {
+    depfile_ = snapshot_deps_filename_;
+    snapshot_deps_filename_ = NULL;
+  }
+
   if ((Options::package_root() != NULL) && (packages_file_ != NULL)) {
     Log::PrintErr(
         "Specifying both a packages directory and a packages "
@@ -437,9 +451,14 @@ int Options::ParseArguments(int argc,
     Log::PrintErr("Empty package file name specified.\n");
     return -1;
   }
-  if (((gen_snapshot_kind_ != kNone) || (snapshot_deps_filename_ != NULL)) &&
-      (snapshot_filename_ == NULL)) {
+  if ((gen_snapshot_kind_ != kNone) && (snapshot_filename_ == NULL)) {
     Log::PrintErr("Generating a snapshot requires a filename (--snapshot).\n");
+    return -1;
+  }
+  if ((gen_snapshot_kind_ == kNone) && (depfile_ != NULL) &&
+      (snapshot_filename_ == NULL) && (depfile_output_filename_ == NULL)) {
+    Log::PrintErr("Generating a depfile requires an output filename"
+                  " (--depfile-output-filename or --snapshot).\n");
     return -1;
   }
   if ((gen_snapshot_kind_ != kNone) && vm_run_app_snapshot) {

@@ -10,6 +10,7 @@
 #include "include/dart_native_api.h"
 #include "platform/assert.h"
 #include "platform/globals.h"
+#include "platform/hashmap.h"
 
 namespace dart {
 namespace bin {
@@ -31,6 +32,10 @@ static inline Dart_Handle ThrowIfError(Dart_Handle handle) {
     Dart_PropagateError(handle);
   }
   return handle;
+}
+
+static inline void* GetHashmapKeyFromString(char* key) {
+  return reinterpret_cast<void*>(key);
 }
 
 class CommandLineOptions {
@@ -204,10 +209,8 @@ class DartUtils {
   static Dart_Handle NewError(const char* format, ...);
   static Dart_Handle NewInternalError(const char* message);
 
-  static Dart_Handle BuiltinLib() {
-    IsolateData* isolate_data =
-        reinterpret_cast<IsolateData*>(Dart_CurrentIsolateData());
-    return isolate_data->builtin_lib();
+  static Dart_Handle LookupBuiltinLib() {
+    return Dart_LookupLibrary(NewString(kBuiltinLibURL));
   }
 
   static bool SetOriginalWorkingDirectory();
@@ -222,6 +225,7 @@ class DartUtils {
     kSnapshotMagicNumber,
     kAppJITMagicNumber,
     kKernelMagicNumber,
+    kKernelListMagicNumber,
     kGzipMagicNumber,
     kUnknownMagicNumber
   };
@@ -257,6 +261,9 @@ class DartUtils {
 
   static Dart_Handle LibraryFilePath(Dart_Handle library_uri);
 
+  static void SetEnvironment(dart::SimpleHashMap* environment);
+  static Dart_Handle EnvironmentCallback(Dart_Handle name);
+
  private:
   static Dart_Handle SetWorkingDirectory();
   static Dart_Handle PrepareBuiltinLibrary(Dart_Handle builtin_lib,
@@ -271,6 +278,8 @@ class DartUtils {
   static Dart_Handle PrepareIOLibrary(Dart_Handle io_lib);
   static Dart_Handle PrepareIsolateLibrary(Dart_Handle isolate_lib);
   static Dart_Handle PrepareCLILibrary(Dart_Handle cli_lib);
+
+  static dart::SimpleHashMap* environment_;
 
   DISALLOW_ALLOCATION();
   DISALLOW_IMPLICIT_CONSTRUCTORS(DartUtils);
@@ -642,6 +651,7 @@ struct MagicNumberData {
 extern MagicNumberData appjit_magic_number;
 extern MagicNumberData snapshot_magic_number;
 extern MagicNumberData kernel_magic_number;
+extern MagicNumberData kernel_list_magic_number;
 extern MagicNumberData gzip_magic_number;
 
 }  // namespace bin

@@ -25,15 +25,9 @@
 
 namespace dart {
 
-#if !defined(DART_PRECOMPILED_RUNTIME)
-
 #define Z (T->zone())
 
 DEFINE_FLAG(bool, trace_kernel, false, "Trace Kernel service requests.");
-DEFINE_FLAG(bool,
-            show_kernel_isolate,
-            false,
-            "Show Kernel service isolate as normal isolate.");
 DEFINE_FLAG(bool,
             suppress_fe_warnings,
             false,
@@ -98,9 +92,8 @@ class RunKernelTask : public ThreadPool::Task {
     api_flags.enable_asserts = false;
     api_flags.enable_error_on_bad_type = false;
     api_flags.enable_error_on_bad_override = false;
-    api_flags.reify_generic_functions = false;
-    api_flags.strong = false;
-    api_flags.sync_async = false;
+    api_flags.use_dart_frontend = true;
+    api_flags.unsafe_trust_strong_mode_types = false;
 #if !defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_DBC)
     api_flags.use_field_guards = true;
 #endif
@@ -181,9 +174,6 @@ class RunKernelTask : public ThreadPool::Task {
     if (FLAG_trace_kernel) {
       OS::PrintErr(DART_KERNEL_ISOLATE_NAME ": Shutdown.\n");
     }
-    // This should be the last line so the check
-    // IsKernelIsolate works during the shutdown process.
-    KernelIsolate::SetKernelIsolate(NULL);
   }
 
   bool RunMain(Isolate* I) {
@@ -237,6 +227,14 @@ void KernelIsolate::Run() {
   Dart::thread_pool()->Run(new RunKernelTask());
 }
 
+void KernelIsolate::Shutdown() {
+  MonitorLocker ml(monitor_);
+  while (isolate_ != NULL) {
+    Isolate::KillIfExists(isolate_, Isolate::kInternalKillMsg);
+    ml.Wait();
+  }
+}
+
 void KernelIsolate::InitCallback(Isolate* I) {
   Thread* T = Thread::Current();
   ASSERT(I == T->isolate());
@@ -279,11 +277,13 @@ void KernelIsolate::SetKernelIsolate(Isolate* isolate) {
     isolate->set_is_kernel_isolate(true);
   }
   isolate_ = isolate;
+  ml.NotifyAll();
 }
 
 void KernelIsolate::SetLoadPort(Dart_Port port) {
   MonitorLocker ml(monitor_);
   kernel_port_ = port;
+  ml.NotifyAll();
 }
 
 void KernelIsolate::FinishedInitializing() {
@@ -445,7 +445,7 @@ class KernelCompilationRequest : public ValueObject {
 
     Dart_CObject dart_sync_async;
     dart_sync_async.type = Dart_CObject_kBool;
-    dart_sync_async.value.as_bool = isolate->sync_async();
+    dart_sync_async.value.as_bool = FLAG_sync_async;
 
     Dart_CObject* message_arr[] = {&tag,
                                    &send_port,
@@ -565,7 +565,7 @@ class KernelCompilationRequest : public ValueObject {
 
     Dart_CObject dart_sync_async;
     dart_sync_async.type = Dart_CObject_kBool;
-    dart_sync_async.value.as_bool = isolate->sync_async();
+    dart_sync_async.value.as_bool = FLAG_sync_async;
 
     Dart_CObject package_config_uri;
     if (package_config != NULL) {
@@ -863,7 +863,5 @@ void KernelIsolate::NotifyAboutIsolateShutdown(const Isolate* isolate) {
   // Send the message.
   Dart_PostCObject(kernel_port, &message);
 }
-
-#endif  // DART_PRECOMPILED_RUNTIME
 
 }  // namespace dart

@@ -9,6 +9,7 @@ import 'dart:collection';
 import 'dart:core' hide Type;
 import 'dart:math' show max;
 
+import 'package:kernel/target/targets.dart' show Target;
 import 'package:kernel/ast.dart' hide Statement, StatementVisitor;
 import 'package:kernel/class_hierarchy.dart' show ClosedWorldClassHierarchy;
 import 'package:kernel/library_index.dart' show LibraryIndex;
@@ -163,7 +164,8 @@ class _DirectInvocation extends _Invocation {
       case CallKind.PropertyGet:
         assertx(args.values.length == firstParamIndex);
         assertx(args.names.isEmpty);
-        return fieldValue.getValue(typeFlowAnalysis);
+        return fieldValue.getValue(
+            typeFlowAnalysis, field.isStatic ? null : args.values[0]);
 
       case CallKind.PropertySet:
         assertx(args.values.length == firstParamIndex + 1);
@@ -176,7 +178,8 @@ class _DirectInvocation extends _Invocation {
         // Call via field.
         // TODO(alexmarkov): support function types and use inferred type
         // to get more precise return type.
-        final receiver = fieldValue.getValue(typeFlowAnalysis);
+        final receiver = fieldValue.getValue(
+            typeFlowAnalysis, field.isStatic ? null : args.values[0]);
         if (receiver != const EmptyType()) {
           typeFlowAnalysis.applyCall(/* callSite = */ null,
               DynamicSelector.kCall, new Args.withReceiver(args, receiver),
@@ -185,7 +188,7 @@ class _DirectInvocation extends _Invocation {
         return new Type.nullableAny();
 
       case CallKind.FieldInitializer:
-        assertx(args.values.isEmpty);
+        assertx(args.values.length == firstParamIndex);
         assertx(args.names.isEmpty);
         Type initializerResult = typeFlowAnalysis
             .getSummary(field)
@@ -450,6 +453,13 @@ class _DispatchableInvocation extends _Invocation {
         }
         _getReceiverTypeBuilder(targets, kNoSuchMethodMarker)
             .addConcreteType(receiver);
+      } else if (selector is DynamicSelector) {
+        if (kPrintTrace) {
+          tracePrint(
+              "Dynamic selector - adding noSuchMethod for receiver $receiver");
+        }
+        _getReceiverTypeBuilder(targets, kNoSuchMethodMarker)
+            .addConcreteType(receiver);
       } else {
         if (kPrintTrace) {
           tracePrint("Target is not found for receiver $receiver");
@@ -678,7 +688,6 @@ class _FieldValue extends _DependencyTracker {
   final Field field;
   final Type staticType;
   Type value;
-  _DirectInvocation _initializerInvocation;
 
   _FieldValue(this.field) : staticType = new Type.fromStatic(field.type) {
     if (field.initializer == null && _isDefaultValueOfFieldObservable()) {
@@ -710,30 +719,59 @@ class _FieldValue extends _DependencyTracker {
     });
   }
 
-  void ensureInitialized(TypeFlowAnalysis typeFlowAnalysis) {
+  void ensureInitialized(TypeFlowAnalysis typeFlowAnalysis, Type receiverType) {
     if (field.initializer != null) {
-      if (_initializerInvocation == null) {
-        _initializerInvocation = typeFlowAnalysis._invocationsCache
-            .getInvocation(
-                new DirectSelector(field, callKind: CallKind.FieldInitializer),
-                new Args<Type>(const <Type>[]));
-      }
+      assertx(field.isStatic == (receiverType == null));
+      final args = !field.isStatic ? <Type>[receiverType] : const <Type>[];
+      final initializerInvocation = typeFlowAnalysis._invocationsCache
+          .getInvocation(
+              new DirectSelector(field, callKind: CallKind.FieldInitializer),
+              new Args<Type>(args));
 
       // It may update the field value.
-      typeFlowAnalysis.workList.processInvocation(_initializerInvocation);
+      typeFlowAnalysis.workList.processInvocation(initializerInvocation);
     }
   }
 
-  Type getValue(TypeFlowAnalysis typeFlowAnalysis) {
-    ensureInitialized(typeFlowAnalysis);
+  Type getValue(TypeFlowAnalysis typeFlowAnalysis, Type receiverType) {
+    ensureInitialized(typeFlowAnalysis, receiverType);
     addDependentInvocation(typeFlowAnalysis.currentInvocation);
     return value;
   }
 
   void setValue(Type newValue, TypeFlowAnalysis typeFlowAnalysis) {
-    final Type newType = value.union(
-        newValue.intersection(staticType, typeFlowAnalysis.hierarchyCache),
-        typeFlowAnalysis.hierarchyCache);
+    // Make sure type cones are specialized before putting them into field
+    // value, in order to ensure that dependency is established between
+    // cone's base type and corresponding field setter.
+    //
+    // This ensures correct invalidation in the following scenario:
+    //
+    // 1) setValue(Cone(X)).
+    //    It sets field value to Cone(X).
+    //
+    // 2) setValue(Y).
+    //    It calculates Cone(X) U Y, specializing Cone(X).
+    //    This establishes class X --> setter(Y)  dependency.
+    //    If X does not have allocated subclasses, then Cone(X) is specialized
+    //    to Empty and the new field value is Y.
+    //
+    // 3) A new allocated subtype is added to X.
+    //    This invalidates setter(Y). However, recalculation of setter(Y)
+    //    does not yield correct field value, as value calculated on step 1 is
+    //    already lost, and repeating setValue(Y) will not change field value.
+    //
+    // The eager specialization of field value ensures that specialization
+    // will happen on step 1 and dependency class X --> setter(Cone(X))
+    // is established.
+    //
+    final hierarchy = typeFlowAnalysis.hierarchyCache;
+    Type newType = value
+        .union(
+            newValue.specialize(hierarchy).intersection(staticType, hierarchy),
+            hierarchy)
+        .specialize(hierarchy);
+    assertx(newType.isSpecialized);
+
     if (newType != value) {
       if (kPrintTrace) {
         tracePrint("Set field $field value $newType");
@@ -887,8 +925,8 @@ class _ClassHierarchyCache implements TypeHierarchy {
   @override
   bool isSubtype(DartType subType, DartType superType) {
     if (kPrintTrace) {
-      tracePrint("isSubtype for sub = $subType (${subType
-              .runtimeType}), sup = $superType (${superType.runtimeType})");
+      tracePrint("isSubtype for sub = $subType (${subType.runtimeType}),"
+          " sup = $superType (${superType.runtimeType})");
     }
     if (subType == superType) {
       return true;
@@ -1138,9 +1176,11 @@ class _WorkList {
 }
 
 class TypeFlowAnalysis implements EntryPointsListener, CallHandler {
+  final Target target;
   final TypeEnvironment environment;
   final LibraryIndex libraryIndex;
-  final NativeCodeOracle nativeCodeOracle;
+  final PragmaAnnotationParser annotationMatcher;
+  NativeCodeOracle nativeCodeOracle;
   _ClassHierarchyCache hierarchyCache;
   SummaryCollector summaryCollector;
   _InvocationsCache _invocationsCache;
@@ -1149,13 +1189,15 @@ class TypeFlowAnalysis implements EntryPointsListener, CallHandler {
   final Map<Member, Summary> _summaries = <Member, Summary>{};
   final Map<Field, _FieldValue> _fieldValues = <Field, _FieldValue>{};
 
-  TypeFlowAnalysis(Component component, CoreTypes coreTypes,
+  TypeFlowAnalysis(this.target, Component component, CoreTypes coreTypes,
       ClosedWorldClassHierarchy hierarchy, this.environment, this.libraryIndex,
-      {List<String> entryPointsJSONFiles})
-      : nativeCodeOracle = new NativeCodeOracle(libraryIndex) {
+      {List<String> entryPointsJSONFiles, PragmaAnnotationParser matcher})
+      : annotationMatcher =
+            matcher ?? new ConstantPragmaAnnotationParser(coreTypes) {
+    nativeCodeOracle = new NativeCodeOracle(libraryIndex, annotationMatcher);
     hierarchyCache = new _ClassHierarchyCache(this, hierarchy);
     summaryCollector =
-        new SummaryCollector(environment, this, nativeCodeOracle);
+        new SummaryCollector(target, environment, this, nativeCodeOracle);
     _invocationsCache = new _InvocationsCache(this);
     workList = new _WorkList(this);
 
@@ -1163,7 +1205,8 @@ class TypeFlowAnalysis implements EntryPointsListener, CallHandler {
       nativeCodeOracle.processEntryPointsJSONFiles(entryPointsJSONFiles, this);
     }
 
-    component.accept(new PragmaEntryPointsVisitor(coreTypes, this));
+    component.accept(new PragmaEntryPointsVisitor(
+        this, nativeCodeOracle, annotationMatcher));
   }
 
   _Invocation get currentInvocation => workList.callStack.last;

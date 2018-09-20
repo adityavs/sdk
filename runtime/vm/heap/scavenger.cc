@@ -7,8 +7,8 @@
 #include "vm/dart.h"
 #include "vm/dart_api_state.h"
 #include "vm/flag_list.h"
+#include "vm/heap/pointer_block.h"
 #include "vm/heap/safepoint.h"
-#include "vm/heap/store_buffer.h"
 #include "vm/heap/verifier.h"
 #include "vm/heap/weak_table.h"
 #include "vm/isolate.h"
@@ -38,7 +38,7 @@ DEFINE_FLAG(int, new_gen_growth_factor, 2, "Grow new gen by this factor.");
 // objects. The kMarkBit does not intersect with the target address because of
 // object alignment.
 enum {
-  kForwardingMask = 1 << RawObject::kMarkBit,
+  kForwardingMask = 1 << RawObject::kOldAndNotMarkedBit,
   kNotForwarded = 0,
   kForwarded = kForwardingMask,
 };
@@ -110,6 +110,7 @@ class ScavengerVisitor : public ObjectPointerVisitor {
     thread_->StoreBufferAddObjectGC(visiting_old_object_);
   }
 
+  DART_FORCE_INLINE
   void ScavengePointer(RawObject** p) {
     // ScavengePointer cannot be called recursively.
     RawObject* raw_obj = *p;
@@ -166,6 +167,18 @@ class ScavengerVisitor : public ObjectPointerVisitor {
       // Copy the object to the new location.
       memmove(reinterpret_cast<void*>(new_addr),
               reinterpret_cast<void*>(raw_addr), size);
+
+      RawObject* new_obj = RawObject::FromAddr(new_addr);
+      if (new_obj->IsOldObject()) {
+        // Promoted: update age/barrier tags.
+        uint32_t tags = new_obj->ptr()->tags_;
+        tags = RawObject::OldBit::update(true, tags);
+        tags = RawObject::OldAndNotMarkedBit::update(true, tags);
+        tags = RawObject::OldAndNotRememberedBit::update(true, tags);
+        tags = RawObject::NewBit::update(false, tags);
+        new_obj->ptr()->tags_ = tags;
+      }
+
       // Remember forwarding address.
       ForwardTo(raw_addr, new_addr);
     }
@@ -577,10 +590,18 @@ void Scavenger::IterateObjectIdTable(Isolate* isolate,
 }
 
 void Scavenger::IterateRoots(Isolate* isolate, ScavengerVisitor* visitor) {
+  NOT_IN_PRODUCT(Thread* thread = Thread::Current());
   int64_t start = OS::GetCurrentMonotonicMicros();
-  isolate->VisitObjectPointers(visitor, ValidationPolicy::kDontValidateFrames);
+  {
+    TIMELINE_FUNCTION_GC_DURATION(thread, "ProcessRoots");
+    isolate->VisitObjectPointers(visitor,
+                                 ValidationPolicy::kDontValidateFrames);
+  }
   int64_t middle = OS::GetCurrentMonotonicMicros();
-  IterateStoreBuffers(isolate, visitor);
+  {
+    TIMELINE_FUNCTION_GC_DURATION(thread, "ProcessRememberedSet");
+    IterateStoreBuffers(isolate, visitor);
+  }
   IterateObjectIdTable(isolate, visitor);
   int64_t end = OS::GetCurrentMonotonicMicros();
   heap_->RecordData(kToKBAfterStoreBuffer, RoundWordsToKB(UsedInWords()));
@@ -877,6 +898,7 @@ void Scavenger::Scavenge() {
   }
 
   // Prepare for a scavenge.
+  FlushTLS();
   SpaceUsage usage_before = GetCurrentUsage();
   intptr_t promo_candidate_words =
       (survivor_end_ - FirstObjectStart()) / kWordSize;
@@ -890,10 +912,13 @@ void Scavenger::Scavenge() {
     page_space->AcquireDataLock();
     IterateRoots(isolate, &visitor);
     int64_t iterate_roots = OS::GetCurrentMonotonicMicros();
-    ProcessToSpace(&visitor);
+    {
+      TIMELINE_FUNCTION_GC_DURATION(thread, "ProcessToSpace");
+      ProcessToSpace(&visitor);
+    }
     int64_t process_to_space = OS::GetCurrentMonotonicMicros();
     {
-      TIMELINE_FUNCTION_GC_DURATION(thread, "WeakHandleProcessing");
+      TIMELINE_FUNCTION_GC_DURATION(thread, "ProcessWeakHandles");
       ScavengerWeakVisitor weak_visitor(thread, this);
       IterateWeakRoots(isolate, &weak_visitor);
     }

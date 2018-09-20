@@ -1861,18 +1861,6 @@ class Foo<T extends Pattern> {
   U method<U extends T>(U u) => u;
 }
 main() {
-/*!!!
-  String s;
-  var a = new Foo().method<String>("str");
-  s = a;
-  new Foo();
-
-  var b = new Foo<String>().method("str");
-  s = b;
-  var c = new Foo().method("str");
-  s = c;
-  */
-
   new Foo<String>()./*error:COULD_NOT_INFER*/method(42);
 }
 ''');
@@ -1898,11 +1886,12 @@ main() {
   printInt(/*info:DOWN_CAST_IMPLICIT*/myMax(1, 2));
   printInt(myMax(1, 2) as int);
 
-  // Mixing int and double means return type is num.
+  // An int context means doubles are rejected
   printInt(max(1, /*error:ARGUMENT_TYPE_NOT_ASSIGNABLE*/2.0));
   printInt(min(1, /*error:ARGUMENT_TYPE_NOT_ASSIGNABLE*/2.0));
-  printDouble(max(/*error:ARGUMENT_TYPE_NOT_ASSIGNABLE*/1, 2.0));
-  printDouble(min(/*error:ARGUMENT_TYPE_NOT_ASSIGNABLE*/1, 2.0));
+  // A double context means ints are accepted as doubles
+  printDouble(max(1, 2.0));
+  printDouble(min(1, 2.0));
 
   // Types other than int and double are not accepted.
   printInt(
@@ -1988,7 +1977,7 @@ main() {
   test_genericMethods_inferGenericFunctionParameterType() async {
     var mainUnit = await checkFileElement('''
 class C<T> extends D<T> {
-  f<U>(x) {}
+  f<U>(x) { return null; }
 }
 class D<T> {
   F<U> f<U>(U u) => null;
@@ -2016,7 +2005,7 @@ typedef List<V> G<V>();
   test_genericMethods_inferGenericFunctionReturnType() async {
     var mainUnit = await checkFileElement('''
 class C<T> extends D<T> {
-  f<U>(x) {}
+  f<U>(x) { return null; }
 }
 class D<T> {
   F<U> f<U>(U u) => null;
@@ -3377,7 +3366,7 @@ class B<E> extends A<E> implements M {
   const B();
   int get y => 0;
 
-  m(a, f(v, E e)) {}
+  m(a, f(v, E e)) { return null; }
 }
 
 foo () {
@@ -3431,7 +3420,7 @@ class B<E> extends A<E> implements M {
   const B();
   int get y => 0;
 
-  m(a, f(v, int e)) {}
+  m(a, f(v, int e)) { return null; }
 }
 
 foo () {
@@ -4417,7 +4406,7 @@ class InferredTypeTest extends AbstractStrongTest with InferredTypeMixin {
   @override
   Future<CompilationUnitElement> checkFileElement(String content) async {
     CompilationUnit unit = await checkFile(content);
-    return unit.element;
+    return unit.declaredElement;
   }
 }
 
@@ -4428,6 +4417,16 @@ class InferredTypeTest_Driver extends InferredTypeTest {
 
   @override
   bool get hasExtraTaskModelPass => false;
+
+  @override
+  test_circularReference_viaClosures() async {
+    await super.test_circularReference_viaClosures();
+  }
+
+  @override
+  test_circularReference_viaClosures_initializerTypes() async {
+    await super.test_circularReference_viaClosures_initializerTypes();
+  }
 
   @override
   test_instantiateToBounds_typeName_OK_hasBound_definedAfter() async {
@@ -4448,18 +4447,8 @@ class InferredTypeTest_Driver extends InferredTypeTest {
   }
 
   @override
-  test_circularReference_viaClosures() async {
-    await super.test_circularReference_viaClosures();
-  }
-
-  @override
   test_unsafeBlockClosureInference_closureCall() async {
     await super.test_unsafeBlockClosureInference_closureCall();
-  }
-
-  @override
-  test_circularReference_viaClosures_initializerTypes() async {
-    await super.test_circularReference_viaClosures_initializerTypes();
   }
 
   @failingTest

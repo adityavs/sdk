@@ -116,7 +116,7 @@ RawTypedData* CompilerDeoptInfo::CreateDeoptInfo(FlowGraphCompiler* compiler,
     // For any outer environment the deopt id is that of the call instruction
     // which is recorded in the outer environment.
     builder->AddReturnAddress(current->function(),
-                              Thread::ToDeoptAfter(current->deopt_id()),
+                              DeoptId::ToDeoptAfter(current->deopt_id()),
                               slot_ix++);
 
     // The values of outgoing arguments can be changed from the inlined call so
@@ -222,6 +222,10 @@ RawSubtypeTestCache* FlowGraphCompiler::GenerateCallSubtypeTestStub(
     __ pushl(instantiator_type_arguments_reg);
     __ pushl(function_type_arguments_reg);
     __ Call(*StubCode::Subtype4TestCache_entry());
+  } else if (test_kind == kTestTypeSixArgs) {
+    __ pushl(instantiator_type_arguments_reg);
+    __ pushl(function_type_arguments_reg);
+    __ Call(*StubCode::Subtype6TestCache_entry());
   } else {
     UNREACHABLE();
   }
@@ -248,8 +252,9 @@ FlowGraphCompiler::GenerateInstantiatedTypeWithArgumentsTest(
     Label* is_not_instance_lbl) {
   __ Comment("InstantiatedTypeWithArgumentsTest");
   ASSERT(type.IsInstantiated());
+  ASSERT(!type.IsFunctionType());
   const Class& type_class = Class::ZoneHandle(zone(), type.type_class());
-  ASSERT(type.IsFunctionType() || (type_class.NumTypeArguments() > 0));
+  ASSERT(type_class.NumTypeArguments() > 0);
   const Register kInstanceReg = EAX;
   Error& bound_error = Error::Handle(zone());
   const Type& int_type = Type::Handle(zone(), Type::IntType());
@@ -263,42 +268,39 @@ FlowGraphCompiler::GenerateInstantiatedTypeWithArgumentsTest(
   } else {
     __ j(ZERO, is_not_instance_lbl);
   }
-  // A function type test requires checking the function signature.
-  if (!type.IsFunctionType()) {
-    const intptr_t num_type_args = type_class.NumTypeArguments();
-    const intptr_t num_type_params = type_class.NumTypeParameters();
-    const intptr_t from_index = num_type_args - num_type_params;
-    const TypeArguments& type_arguments =
-        TypeArguments::ZoneHandle(zone(), type.arguments());
-    const bool is_raw_type = type_arguments.IsNull() ||
-                             type_arguments.IsRaw(from_index, num_type_params);
-    if (is_raw_type) {
-      const Register kClassIdReg = ECX;
-      // dynamic type argument, check only classes.
-      __ LoadClassId(kClassIdReg, kInstanceReg);
-      __ cmpl(kClassIdReg, Immediate(type_class.id()));
-      __ j(EQUAL, is_instance_lbl);
-      // List is a very common case.
-      if (IsListClass(type_class)) {
-        GenerateListTypeCheck(kClassIdReg, is_instance_lbl);
-      }
-      return GenerateSubtype1TestCacheLookup(
-          token_pos, type_class, is_instance_lbl, is_not_instance_lbl);
+  const intptr_t num_type_args = type_class.NumTypeArguments();
+  const intptr_t num_type_params = type_class.NumTypeParameters();
+  const intptr_t from_index = num_type_args - num_type_params;
+  const TypeArguments& type_arguments =
+      TypeArguments::ZoneHandle(zone(), type.arguments());
+  const bool is_raw_type = type_arguments.IsNull() ||
+                           type_arguments.IsRaw(from_index, num_type_params);
+  if (is_raw_type) {
+    const Register kClassIdReg = ECX;
+    // dynamic type argument, check only classes.
+    __ LoadClassId(kClassIdReg, kInstanceReg);
+    __ cmpl(kClassIdReg, Immediate(type_class.id()));
+    __ j(EQUAL, is_instance_lbl);
+    // List is a very common case.
+    if (IsListClass(type_class)) {
+      GenerateListTypeCheck(kClassIdReg, is_instance_lbl);
     }
-    // If one type argument only, check if type argument is Object or dynamic.
-    if (type_arguments.Length() == 1) {
-      const AbstractType& tp_argument =
-          AbstractType::ZoneHandle(zone(), type_arguments.TypeAt(0));
-      ASSERT(!tp_argument.IsMalformed());
-      if (tp_argument.IsType()) {
-        ASSERT(tp_argument.HasResolvedTypeClass());
-        // Check if type argument is dynamic or Object.
-        const Type& object_type = Type::Handle(zone(), Type::ObjectType());
-        if (object_type.IsSubtypeOf(tp_argument, NULL, NULL, Heap::kOld)) {
-          // Instance class test only necessary.
-          return GenerateSubtype1TestCacheLookup(
-              token_pos, type_class, is_instance_lbl, is_not_instance_lbl);
-        }
+    return GenerateSubtype1TestCacheLookup(
+        token_pos, type_class, is_instance_lbl, is_not_instance_lbl);
+  }
+  // If one type argument only, check if type argument is Object or dynamic.
+  if (type_arguments.Length() == 1) {
+    const AbstractType& tp_argument =
+        AbstractType::ZoneHandle(zone(), type_arguments.TypeAt(0));
+    ASSERT(!tp_argument.IsMalformed());
+    if (tp_argument.IsType()) {
+      ASSERT(tp_argument.HasResolvedTypeClass());
+      // Check if type argument is dynamic or Object.
+      const Type& object_type = Type::Handle(zone(), Type::ObjectType());
+      if (object_type.IsSubtypeOf(tp_argument, NULL, NULL, Heap::kOld)) {
+        // Instance class test only necessary.
+        return GenerateSubtype1TestCacheLookup(
+            token_pos, type_class, is_instance_lbl, is_not_instance_lbl);
       }
     }
   }
@@ -335,10 +337,7 @@ bool FlowGraphCompiler::GenerateInstantiatedTypeNoArgumentsTest(
     Label* is_not_instance_lbl) {
   __ Comment("InstantiatedTypeNoArgumentsTest");
   ASSERT(type.IsInstantiated());
-  if (type.IsFunctionType()) {
-    // Fallthrough.
-    return true;
-  }
+  ASSERT(!type.IsFunctionType());
   const Class& type_class = Class::Handle(zone(), type.type_class());
   ASSERT(type_class.NumTypeArguments() == 0);
 
@@ -432,12 +431,19 @@ RawSubtypeTestCache* FlowGraphCompiler::GenerateUninstantiatedTypeTest(
     Label* is_instance_lbl,
     Label* is_not_instance_lbl) {
   __ Comment("UninstantiatedTypeTest");
+  const Register kInstanceReg = EAX;
+  const Register kInstantiatorTypeArgumentsReg = EDX;
+  const Register kFunctionTypeArgumentsReg = ECX;
+  const Register kTempReg = EDI;
   ASSERT(!type.IsInstantiated());
+  ASSERT(!type.IsFunctionType());
   // Skip check if destination is a dynamic type.
   const Immediate& raw_null =
       Immediate(reinterpret_cast<intptr_t>(Object::null()));
   if (type.IsTypeParameter()) {
     const TypeParameter& type_param = TypeParameter::Cast(type);
+    const AbstractType& bound = AbstractType::Handle(type_param.bound());
+
     __ movl(EDX, Address(ESP, 1 * kWordSize));  // Get instantiator type args.
     __ movl(ECX, Address(ESP, 0 * kWordSize));  // Get function type args.
     // EDX: instantiator type arguments.
@@ -469,39 +475,59 @@ RawSubtypeTestCache* FlowGraphCompiler::GenerateUninstantiatedTypeTest(
     Label fall_through;
     __ jmp(&fall_through);
 
+    // If it's guaranteed, by type-parameter bound, that the type parameter will
+    // never have a value of a function type.
+    auto test_kind = !bound.IsTopType() && !bound.IsFunctionType() &&
+                             !bound.IsDartFunctionType() && bound.IsType()
+                         ? kTestTypeSixArgs
+                         : kTestTypeFourArgs;
+
     __ Bind(&not_smi);
-    // EDX: instantiator type arguments.
-    // ECX: function type arguments.
-    // EAX: instance.
-    const Register kInstanceReg = EAX;
-    const Register kInstantiatorTypeArgumentsReg = EDX;
-    const Register kFunctionTypeArgumentsReg = ECX;
-    const Register kTempReg = EDI;
     const SubtypeTestCache& type_test_cache = SubtypeTestCache::ZoneHandle(
         zone(), GenerateCallSubtypeTestStub(
-                    kTestTypeFourArgs, kInstanceReg,
-                    kInstantiatorTypeArgumentsReg, kFunctionTypeArgumentsReg,
-                    kTempReg, is_instance_lbl, is_not_instance_lbl));
+                    test_kind, kInstanceReg, kInstantiatorTypeArgumentsReg,
+                    kFunctionTypeArgumentsReg, kTempReg, is_instance_lbl,
+                    is_not_instance_lbl));
     __ Bind(&fall_through);
     return type_test_cache.raw();
   }
   if (type.IsType()) {
-    const Register kInstanceReg = EAX;
-    const Register kInstantiatorTypeArgumentsReg = EDX;
-    const Register kFunctionTypeArgumentsReg = ECX;
     __ testl(kInstanceReg, Immediate(kSmiTagMask));  // Is instance Smi?
     __ j(ZERO, is_not_instance_lbl);
     __ movl(kInstantiatorTypeArgumentsReg, Address(ESP, 1 * kWordSize));
     __ movl(kFunctionTypeArgumentsReg, Address(ESP, 0 * kWordSize));
     // Uninstantiated type class is known at compile time, but the type
     // arguments are determined at runtime by the instantiator(s).
-    const Register kTempReg = EDI;
     return GenerateCallSubtypeTestStub(kTestTypeFourArgs, kInstanceReg,
                                        kInstantiatorTypeArgumentsReg,
                                        kFunctionTypeArgumentsReg, kTempReg,
                                        is_instance_lbl, is_not_instance_lbl);
   }
   return SubtypeTestCache::null();
+}
+
+// Generates function type check.
+//
+// See [GenerateUninstantiatedTypeTest] for calling convention.
+RawSubtypeTestCache* FlowGraphCompiler::GenerateFunctionTypeTest(
+    TokenPosition token_pos,
+    const AbstractType& type,
+    Label* is_instance_lbl,
+    Label* is_not_instance_lbl) {
+  const Register kInstanceReg = EAX;
+  const Register kInstantiatorTypeArgumentsReg = EDX;
+  const Register kFunctionTypeArgumentsReg = ECX;
+  __ Comment("FunctionTypeTest");
+
+  __ testl(kInstanceReg, Immediate(kSmiTagMask));
+  __ j(ZERO, is_not_instance_lbl);
+  // Uninstantiated type class is known at compile time, but the type
+  // arguments are determined at runtime by the instantiator(s).
+  const Register kTempReg = EDI;
+  return GenerateCallSubtypeTestStub(kTestTypeSixArgs, kInstanceReg,
+                                     kInstantiatorTypeArgumentsReg,
+                                     kFunctionTypeArgumentsReg, kTempReg,
+                                     is_instance_lbl, is_not_instance_lbl);
 }
 
 // Inputs:
@@ -521,12 +547,18 @@ RawSubtypeTestCache* FlowGraphCompiler::GenerateInlineInstanceof(
     Label* is_instance_lbl,
     Label* is_not_instance_lbl) {
   __ Comment("InlineInstanceof");
+
+  if (type.IsFunctionType()) {
+    return GenerateFunctionTypeTest(token_pos, type, is_instance_lbl,
+                                    is_not_instance_lbl);
+  }
+
   if (type.IsInstantiated()) {
     const Class& type_class = Class::ZoneHandle(zone(), type.type_class());
     // A class equality check is only applicable with a dst type (not a
     // function type) of a non-parameterized class or with a raw dst type of
     // a parameterized class.
-    if (type.IsFunctionType() || (type_class.NumTypeArguments() > 0)) {
+    if (type_class.NumTypeArguments() > 0) {
       return GenerateInstantiatedTypeWithArgumentsTest(
           token_pos, type, is_instance_lbl, is_not_instance_lbl);
       // Fall through to runtime call.
@@ -788,7 +820,8 @@ void FlowGraphCompiler::CompileGraph() {
 
     intptr_t args_desc_slot = -1;
     if (parsed_function().has_arg_desc_var()) {
-      args_desc_slot = FrameSlotForVariable(parsed_function().arg_desc_var());
+      args_desc_slot = compiler_frame_layout.FrameSlotForVariable(
+          parsed_function().arg_desc_var());
     }
 
     __ Comment("Initialize spill slots");
@@ -798,7 +831,8 @@ void FlowGraphCompiler::CompileGraph() {
       __ movl(EAX, raw_null);
     }
     for (intptr_t i = 0; i < num_locals; ++i) {
-      const intptr_t slot_index = FrameSlotForVariableIndex(-i);
+      const intptr_t slot_index =
+          compiler_frame_layout.FrameSlotForVariableIndex(-i);
       Register value_reg = slot_index == args_desc_slot ? ARGS_DESC_REG : EAX;
       __ movl(Address(EBP, slot_index * kWordSize), value_reg);
     }
@@ -817,14 +851,17 @@ void FlowGraphCompiler::GenerateCall(TokenPosition token_pos,
                                      RawPcDescriptors::Kind kind,
                                      LocationSummary* locs) {
   __ Call(stub_entry);
-  EmitCallsiteMetadata(token_pos, Thread::kNoDeoptId, kind, locs);
+  EmitCallsiteMetadata(token_pos, DeoptId::kNone, kind, locs);
+  AddStubCallTarget(Code::ZoneHandle(stub_entry.code()));
 }
 
 void FlowGraphCompiler::GenerateDartCall(intptr_t deopt_id,
                                          TokenPosition token_pos,
                                          const StubEntry& stub_entry,
                                          RawPcDescriptors::Kind kind,
-                                         LocationSummary* locs) {
+                                         LocationSummary* locs,
+                                         Code::EntryKind entry_kind) {
+  // TODO(sjindel/entrypoints): Support multiple entrypoints on IA32.
   __ Call(stub_entry);
   EmitCallsiteMetadata(token_pos, deopt_id, kind, locs);
 }
@@ -834,7 +871,9 @@ void FlowGraphCompiler::GenerateStaticDartCall(intptr_t deopt_id,
                                                const StubEntry& stub_entry,
                                                RawPcDescriptors::Kind kind,
                                                LocationSummary* locs,
-                                               const Function& target) {
+                                               const Function& target,
+                                               Code::EntryKind entry_kind) {
+  // TODO(sjindel/entrypoints): Support multiple entrypoints on IA32.
   __ Call(stub_entry, true /* movable_target */);
   EmitCallsiteMetadata(token_pos, deopt_id, kind, locs);
   AddStaticCallTarget(target);
@@ -878,7 +917,9 @@ void FlowGraphCompiler::EmitOptimizedInstanceCall(const StubEntry& stub_entry,
                                                   const ICData& ic_data,
                                                   intptr_t deopt_id,
                                                   TokenPosition token_pos,
-                                                  LocationSummary* locs) {
+                                                  LocationSummary* locs,
+                                                  Code::EntryKind entry_kind) {
+  // TODO(sjindel/entrypoints): Support multiple entrypoints on IA32.
   ASSERT(Array::Handle(ic_data.arguments_descriptor()).Length() > 0);
   // Each ICData propagated from unoptimized to optimized code contains the
   // function that corresponds to the Dart function of that IC call. Due
@@ -926,9 +967,9 @@ void FlowGraphCompiler::EmitMegamorphicInstanceCall(
   __ call(Address(THR, Thread::megamorphic_call_checked_entry_offset()));
   __ call(EBX);
 
-  AddCurrentDescriptor(RawPcDescriptors::kOther, Thread::kNoDeoptId, token_pos);
+  AddCurrentDescriptor(RawPcDescriptors::kOther, DeoptId::kNone, token_pos);
   RecordSafepoint(locs, slow_path_argument_count);
-  const intptr_t deopt_id_after = Thread::ToDeoptAfter(deopt_id);
+  const intptr_t deopt_id_after = DeoptId::ToDeoptAfter(deopt_id);
   // Precompilation not implemented on ia32 platform.
   ASSERT(!FLAG_precompiled_mode);
   if (is_optimizing()) {
@@ -938,7 +979,7 @@ void FlowGraphCompiler::EmitMegamorphicInstanceCall(
     // arguments are removed.
     AddCurrentDescriptor(RawPcDescriptors::kDeopt, deopt_id_after, token_pos);
   }
-  EmitCatchEntryState(pending_deoptimization_env_, try_index);
+  RecordCatchEntryMoves(pending_deoptimization_env_, try_index);
   __ Drop(args_desc.CountWithTypeArgs());
 }
 
@@ -956,9 +997,11 @@ void FlowGraphCompiler::EmitOptimizedStaticCall(
     intptr_t count_with_type_args,
     intptr_t deopt_id,
     TokenPosition token_pos,
-    LocationSummary* locs) {
+    LocationSummary* locs,
+    Code::EntryKind entry_kind) {
+  // TODO(sjindel/entrypoints): Support multiple entrypoints on IA32.
   if (function.HasOptionalParameters() ||
-      (isolate()->reify_generic_functions() && function.IsGeneric())) {
+      (FLAG_reify_generic_functions && function.IsGeneric())) {
     __ LoadObject(EDX, arguments_descriptor);
   } else {
     __ xorl(EDX, EDX);  // GC safe smi zero because of stub.

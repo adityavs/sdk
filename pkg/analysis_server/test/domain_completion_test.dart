@@ -533,9 +533,10 @@ class A {
   }
 
   test_inherited() {
-    newFile('/libA.dart', content: 'class A {m() {}}');
     addTestFile('''
-import ${convertPathForImport('/libA.dart')};
+class A {
+  m() {}
+}
 class B extends A {
   x() {^}
 }
@@ -586,6 +587,15 @@ class B extends A {
       expect(replacementLength, equals(0));
       assertHasResult(CompletionSuggestionKind.INVOCATION, 'b');
     });
+  }
+
+  test_is_asPrefixedIdentifierStart() async {
+    addTestFile('''
+class A { var isVisible;}
+main(A p) { var v1 = p.is^; }''');
+    await getSuggestions();
+    assertHasResult(CompletionSuggestionKind.INVOCATION, 'isVisible',
+        relevance: DART_RELEVANCE_DEFAULT);
   }
 
   test_keyword() {
@@ -639,7 +649,7 @@ main() {
   test_local_override() {
     newFile('/libA.dart', content: 'class A {m() {}}');
     addTestFile('''
-import '/libA.dart';
+import '../../libA.dart';
 class B extends A {
   m() {}
   x() {^}
@@ -710,7 +720,7 @@ main() {
   test_overrides() {
     newFile('/libA.dart', content: 'class A {m() {}}');
     addTestFile('''
-import '/libA.dart';
+import '../../libA.dart';
 class B extends A {m() {^}}
 ''');
     return getSuggestions().then((_) {

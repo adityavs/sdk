@@ -21,6 +21,8 @@ namespace bin {
   V(package_root, package_root)                                                \
   V(snapshot, snapshot_filename)                                               \
   V(snapshot_depfile, snapshot_deps_filename)                                  \
+  V(depfile, depfile)                                                          \
+  V(depfile_output_filename, depfile_output_filename)                          \
   V(shared_blobs, shared_blobs_filename)                                       \
   V(save_obfuscation_map, obfuscation_map_filename)                            \
   V(save_compilation_trace, save_compilation_trace_filename)                   \
@@ -110,10 +112,9 @@ class Options {
 #undef CB_OPTIONS_DECL
 
   static bool preview_dart_2() { return !no_preview_dart_2(); }
-  static void SetDart2Options(CommandLineOptions* vm_options);
   static void SetDart1Options(CommandLineOptions* vm_options);
 
-  static dart::HashMap* environment() { return environment_; }
+  static dart::SimpleHashMap* environment() { return environment_; }
 
   static const char* vm_service_server_ip() { return vm_service_server_ip_; }
   static int vm_service_server_port() { return vm_service_server_port_; }
@@ -146,7 +147,7 @@ class Options {
   ENUM_OPTIONS_LIST(ENUM_OPTION_DECL)
 #undef ENUM_OPTION_DECL
 
-  static dart::HashMap* environment_;
+  static dart::SimpleHashMap* environment_;
 
 // Frontend argument processing.
 #if !defined(DART_PRECOMPILED_RUNTIME)

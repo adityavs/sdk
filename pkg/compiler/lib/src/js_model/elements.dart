@@ -6,9 +6,10 @@ library dart2js.js_model.elements;
 
 import '../common/names.dart' show Names;
 import '../elements/entities.dart';
+import '../elements/indexed.dart';
 import '../elements/names.dart';
 import '../elements/types.dart';
-import '../kernel/indexed.dart';
+import '../universe/class_set.dart' show ClassHierarchyNodesMapKey;
 
 /// Map from 'frontend' to 'backend' elements.
 ///
@@ -275,7 +276,9 @@ class TypeConverter implements DartTypeVisitor<DartType, EntityConverter> {
   @override
   DartType visitTypedefType(TypedefType type, EntityConverter converter) {
     return new TypedefType(
-        converter(type.element), visitList(type.typeArguments, converter));
+        converter(type.element),
+        visitList(type.typeArguments, converter),
+        visit(type.unaliased, converter));
   }
 
   @override
@@ -323,7 +326,7 @@ class JLibrary extends IndexedLibrary {
   String toString() => '${jsElementPrefix}library($name)';
 }
 
-class JClass extends IndexedClass {
+class JClass extends IndexedClass with ClassHierarchyNodesMapKey {
   final JLibrary library;
 
   final String name;
